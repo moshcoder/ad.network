@@ -13,6 +13,7 @@ import { CoinPay } from '@profullstack/coinpay-onboard'
 import { Sealer, Store, type Campaign, type DepositRow, type Site, type User } from './db.js'
 import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, publishPage, sitePage, SITE, type Ctx } from './html.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
+import { ringDescriptor, startRingFooterRefresh } from './ring-footer.js'
 import { AdNetwork, newApiKey, UserError, type Config } from './service.js'
 import { VERSION } from './version.js'
 
@@ -100,6 +101,7 @@ export function createApp(deps: Deps) {
   app.get('/install.sh', (c) => c.body(installScript(), 200, { 'content-type': 'text/x-shellscript; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
   // c.text() loses its content-type once the header middleware touches the response; say it outright.
   const plain = (c: Context, text: string) => c.body(text, 200, { 'content-type': 'text/plain; charset=utf-8' })
+  app.get('/.well-known/openwebring.json', (c) => c.json(ringDescriptor(), 200, { 'access-control-allow-origin': '*' }))
   app.get('/robots.txt', (c) => plain(c, 'User-agent: *\nDisallow: /api/\nDisallow: /auth/\nSitemap: ' + ORIGIN + '/sitemap.xml\n'))
   app.get('/sitemap.xml', (c) =>
     c.body(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/help'].map((p) => `<url><loc>${ORIGIN}${p}</loc></url>`).join('')}</urlset>`, 200, { 'content-type': 'application/xml' }),
@@ -516,6 +518,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'
   startRingRefresh()
+  startRingFooterRefresh()
   net.startSweep()
   return Bun.serve({
     port: options.port ?? Number(env.PORT ?? 8800),

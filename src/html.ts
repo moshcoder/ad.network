@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { Campaign, DepositRow, Site, User, Withdrawal } from './db.js'
 import { RING_PLACEHOLDER } from './ring.js'
+import { ringFooter } from './ring-footer.js'
 import { CLICK_CENTS, coinName, DEPOSIT_COINS, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd } from './service.js'
 
 export const SITE = 'https://ad.network.pit.world'
@@ -70,10 +71,7 @@ ${RING_PLACEHOLDER}
 <main>
 ${o.body}
 </main>
-<footer>
-  <span>ad.network: run ads, or earn from your site, in crypto. Ads by <a href="${CRAWLPROOF}">crawlproof</a>, payments by <a href="${COINPAY}">CoinPay</a>.</span>
-  <span><a href="/help">Help</a> · <a href="/help#agents">API, CLI, MCP</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
-</footer>
+${ringFooter()}
 </body>
 </html>`
 }
