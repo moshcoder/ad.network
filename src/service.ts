@@ -224,7 +224,8 @@ export class AdNetwork {
       return mine
     }
     const creative = Array.isArray(c.creatives) ? (c.creatives.find((k) => k.headline) ?? c.creatives[0]) : undefined
-    const row = this.store.addCampaign({ id: c.id, ref: c.ref_slug, sub: user.sub, url, name: c.name, dailyBudgetCents: daily, status: c.status, headline: creative?.headline ?? '', body: creative?.body ?? '' })
+    // crawlproof's own form of the page (it drops the query string) is the one it serves.
+    const row = this.store.addCampaign({ id: c.id, ref: c.ref_slug, sub: user.sub, url: c.destination_url || url, name: c.name, dailyBudgetCents: daily, status: c.status, headline: creative?.headline ?? '', body: creative?.body ?? '' })
     await this.enforce(user.sub).catch(() => {})
     return this.store.campaign(row.id)!
   }
