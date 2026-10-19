@@ -1,50 +1,83 @@
 /**
- * The pay.agent API from anywhere: the CLI, the TUI and the MCP server use this.
- * PAYAGENT_URL points it at another instance; PAYAGENT_KEY (pa_…) reads your own.
+ * The ad.network API from anywhere: the CLI, the TUI and the MCP server use this.
+ * ADNETWORK_KEY (an_…, from ad.network.pit.world/me) signs every call;
+ * ADNETWORK_URL points it at another instance.
  */
-export type ApiPayment = { id: string; handle: string; amount_usd: number; coin: string; amount_crypto: string; address: string; status: string; expires_at: string | null; checkout_url: string }
-export type ApiUser = { handle: string; name: string; coins: string[]; url: string }
+export type ApiAd = { ref: string; name: string; url: string; daily_usd: number; running: boolean; wanted: string; status: string; headline: string; body: string; views: number; clicks: number; spent_usd: number; page: string }
+export type ApiDeposit = { id: string; amount_usd: number; coin: string; address: string; amount_crypto: string; status: string; expires_at: string | null; page: string }
+export type ApiSite = { site: string; tag: string; live: boolean; wallet: string | null; coin: string; earned_usd: number; withdrawable_usd: number; page: string }
+export type ApiMe = { name: string; email: string; balance_usd: number; ads: ApiAd[]; deposits: ApiDeposit[]; sites: ApiSite[] }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
     super(message)
   }
 }
 
-export class PayAgentClient {
+export class AdNetworkClient {
   readonly base: string
-  constructor(base = process.env.PAYAGENT_URL ?? 'https://pay.agent.pit.world', private readonly key = process.env.PAYAGENT_KEY, private readonly doFetch: typeof fetch = fetch) {
+  constructor(
+    base = process.env.ADNETWORK_URL ?? 'https://ad.network.pit.world',
+    private readonly key = process.env.ADNETWORK_KEY,
+    private readonly doFetch: typeof fetch = fetch,
+  ) {
     this.base = base.replace(/\/+$/, '')
   }
 
-  private async call<T>(method: string, path: string, body?: unknown, auth = false): Promise<T> {
+  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    if (!this.key) throw new ApiError(`Set ADNETWORK_KEY to your key from ${this.base}/me`, 401)
     const response = await this.doFetch(this.base + path, {
       method,
-      headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}), ...(auth && this.key ? { authorization: `Bearer ${this.key}` } : {}) },
+      headers: { accept: 'application/json', authorization: `Bearer ${this.key}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(30_000),
+      // Making an ad reads the page and writes the copy: allow it a couple of minutes.
+      signal: AbortSignal.timeout(180_000),
     })
     const data = (await response.json().catch(() => ({}))) as { error?: string }
-    if (!response.ok) throw new ApiError(data.error ?? `pay.agent answered ${response.status}`, response.status)
+    if (!response.ok) throw new ApiError(data.error ?? `ad.network answered ${response.status}`, response.status)
     return data as T
   }
 
-  user(handle: string): Promise<ApiUser> {
-    return this.call('GET', `/api/v1/users/${encodeURIComponent(handle.replace(/^@/, ''))}`)
+  me(): Promise<ApiMe> {
+    return this.call('GET', '/api/v1/me')
   }
-
-  pay(handle: string, amountUsd: number, coin?: string, note?: string): Promise<ApiPayment> {
-    return this.call('POST', `/api/v1/users/${encodeURIComponent(handle.replace(/^@/, ''))}/payments`, { amount_usd: amountUsd, ...(coin ? { coin } : {}), ...(note ? { note } : {}) })
+  run(url: string, dailyUsd = 5, name?: string): Promise<ApiAd & { balance_usd: number }> {
+    return this.call('POST', '/api/v1/ads', { url, daily_usd: dailyUsd, ...(name ? { name } : {}) })
   }
-
-  payment(id: string): Promise<ApiPayment> {
-    return this.call('GET', `/api/v1/payments/${encodeURIComponent(id)}`)
+  ad(ref: string): Promise<ApiAd> {
+    return this.call('GET', `/api/v1/ads/${encodeURIComponent(ref)}`)
   }
-
-  me(): Promise<ApiUser & { payments: (ApiPayment & { note: string; created_at: string })[] }> {
-    if (!this.key) throw new ApiError('Set PAYAGENT_KEY to your key from pay.agent/me', 401)
-    return this.call('GET', '/api/v1/me', undefined, true)
+  updateAd(ref: string, patch: { running?: boolean; daily_usd?: number }): Promise<ApiAd> {
+    return this.call('PATCH', `/api/v1/ads/${encodeURIComponent(ref)}`, patch)
+  }
+  deleteAd(ref: string): Promise<{ ok: boolean }> {
+    return this.call('DELETE', `/api/v1/ads/${encodeURIComponent(ref)}`)
+  }
+  fund(amountUsd: number, coin?: string): Promise<ApiDeposit> {
+    return this.call('POST', '/api/v1/deposits', { amount_usd: amountUsd, ...(coin ? { coin } : {}) })
+  }
+  deposit(id: string): Promise<ApiDeposit> {
+    return this.call('GET', `/api/v1/deposits/${encodeURIComponent(id)}`)
+  }
+  addSite(site: string): Promise<ApiSite> {
+    return this.call('POST', '/api/v1/sites', { site })
+  }
+  site(site: string): Promise<ApiSite> {
+    return this.call('GET', `/api/v1/sites/${encodeURIComponent(site)}`)
+  }
+  checkSite(site: string): Promise<ApiSite> {
+    return this.call('POST', `/api/v1/sites/${encodeURIComponent(site)}/check`)
+  }
+  setWallet(site: string, wallet: string, coin?: string): Promise<ApiSite> {
+    return this.call('PATCH', `/api/v1/sites/${encodeURIComponent(site)}`, { wallet, ...(coin ? { coin } : {}) })
+  }
+  withdraw(site: string): Promise<{ amount_usd: number; status: string }> {
+    return this.call('POST', `/api/v1/sites/${encodeURIComponent(site)}/withdraw`)
+  }
+  removeSite(site: string): Promise<{ ok: boolean }> {
+    return this.call('DELETE', `/api/v1/sites/${encodeURIComponent(site)}`)
   }
 }
-
-export const PAID = ['confirmed', 'forwarded', 'completed']

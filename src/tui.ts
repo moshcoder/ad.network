@@ -1,115 +1,148 @@
 /**
- * `payagent` with no arguments: pay someone from the terminal.
+ * `adnetwork` with no arguments: your ads and sites as one folding tree.
  *
- * Type a handle, Tab to the amount, Tab to the coin (←/→), Enter makes the
- * payment and shows the address; it then follows the status until it settles.
+ * One click (or Enter) opens a branch in place or picks a row; the row under
+ * the pointer lights up. On an ad, p pauses or runs it; on a site, w withdraws.
+ * r re-reads everything, q quits.
  */
 import { createApp } from '@profullstack/hqtui'
-import { PAID, PayAgentClient, type ApiPayment, type ApiUser } from './client.js'
+import { AdNetworkClient, type ApiAd, type ApiMe, type ApiSite } from './client.js'
 
-export type Field = 'handle' | 'amount' | 'coin'
-export type TuiState = { field: Field; handle: string; amount: string; coinAt: number; payee: ApiUser | null; payment: ApiPayment | null; busy: boolean; error: string | null }
+export type Row = { kind: 'ads' | 'sites'; item?: undefined } | { kind: 'ad'; item: ApiAd } | { kind: 'site'; item: ApiSite }
+export type TuiState = { me: ApiMe | null; open: { ads: boolean; sites: boolean }; selected: number; hovered: number | null; busy: string | null; note: string | null }
 
-export const initialState = (): TuiState => ({ field: 'handle', handle: '', amount: '', coinAt: 0, payee: null, payment: null, busy: false, error: null })
+export const initialState = (): TuiState => ({ me: null, open: { ads: true, sites: true }, selected: 0, hovered: null, busy: null, note: null })
 
-const ORDER: Field[] = ['handle', 'amount', 'coin']
+const money = (n: number) => `$${n.toFixed(2)}`
+
+/** The rows in draw order: each root, then its children while it is open. */
+export function rows(s: TuiState): Row[] {
+  const out: Row[] = [{ kind: 'ads' }]
+  if (s.open.ads) for (const a of s.me?.ads ?? []) out.push({ kind: 'ad', item: a })
+  out.push({ kind: 'sites' })
+  if (s.open.sites) for (const x of s.me?.sites ?? []) out.push({ kind: 'site', item: x })
+  return out
+}
+
+/** Picks a row: a root folds or unfolds in place, anything else is just selected. */
+export function pick(s: TuiState, index: number): void {
+  const row = rows(s)[index]
+  if (!row) return
+  s.selected = index
+  if (row.kind === 'ads' || row.kind === 'sites') {
+    s.open[row.kind] = !s.open[row.kind]
+    s.selected = rows(s).findIndex((r) => r.kind === row.kind)
+  }
+}
 
 /** Pure key handling, testable without a terminal. */
-export function onKey(s: TuiState, key: { name: string; key: string; char?: string }): 'lookup' | 'pay' | 'quit' | null {
-  if (key.key === 'ctrl+c' || (key.name === 'escape' && !s.payment)) return 'quit'
-  if (key.name === 'escape') return (s.payment = null), null
-  if (key.name === 'tab' || key.name === 'down') {
-    const next = ORDER[(ORDER.indexOf(s.field) + 1) % ORDER.length]!
-    const leaving = s.field
-    s.field = next
-    return leaving === 'handle' ? 'lookup' : null
-  }
-  if (key.name === 'up') return (s.field = ORDER[(ORDER.indexOf(s.field) + ORDER.length - 1) % ORDER.length]!), null
-  if (key.name === 'enter') return s.field === 'handle' ? ((s.field = 'amount'), 'lookup') : s.busy ? null : 'pay'
-  if (s.field === 'coin') {
-    const n = s.payee?.coins.length ?? 0
-    if (n && (key.name === 'right' || key.name === 'left')) s.coinAt = (s.coinAt + (key.name === 'right' ? 1 : n - 1)) % n
-    return null
-  }
-  const target = s.field
-  if (key.name === 'backspace') s[target] = s[target].slice(0, -1)
-  else if (key.char && key.char.length === 1 && !key.key.startsWith('ctrl+')) {
-    if (target === 'amount' && !/[0-9.]/.test(key.char)) return null
-    s[target] += key.char.toLowerCase()
-  }
+export function onKey(s: TuiState, key: { name: string; key: string; char?: string }): 'quit' | 'refresh' | 'toggle-ad' | 'withdraw' | null {
+  const n = rows(s).length
+  if (key.key === 'ctrl+c' || key.name === 'escape' || key.char === 'q') return 'quit'
+  if (key.name === 'up') s.selected = (s.selected + n - 1) % n
+  else if (key.name === 'down') s.selected = (s.selected + 1) % n
+  else if (key.name === 'enter' || key.char === ' ') pick(s, s.selected)
+  else if (key.char === 'r') return 'refresh'
+  else if (key.char === 'p' && rows(s)[s.selected]?.kind === 'ad') return 'toggle-ad'
+  else if (key.char === 'w' && rows(s)[s.selected]?.kind === 'site') return 'withdraw'
   return null
 }
 
-export async function runTui(client = new PayAgentClient()): Promise<void> {
+export async function runTui(client = new AdNetworkClient()): Promise<void> {
   const s = initialState()
-  const app = await createApp({ title: 'pay.agent', quitKeys: [] })
-  const lookup = async () => {
-    if (!s.handle) return
-    s.error = null
-    try {
-      s.payee = await client.user(s.handle)
-      s.coinAt = 0
-    } catch (e) {
-      s.payee = null
-      s.error = e instanceof Error ? e.message : String(e)
-    }
-    app.invalidate()
-  }
-  const follow = async (id: string) => {
-    while (s.payment?.id === id && !['confirmed', 'forwarded', 'completed', 'expired', 'failed'].includes(s.payment.status)) {
-      await new Promise((r) => setTimeout(r, 5000))
-      try {
-        const p = await client.payment(id)
-        if (s.payment?.id === id) s.payment = p
-      } catch {}
-      app.invalidate()
-    }
-  }
-  const pay = async () => {
-    s.busy = true
-    s.error = null
+  const app = await createApp({ title: 'ad.network', quitKeys: [] })
+  let visible: number[] = []
+  const act = async (label: string, job: () => Promise<string | void>) => {
+    s.busy = label
+    s.note = null
     app.invalidate()
     try {
-      s.payment = await client.pay(s.handle, Number(s.amount), s.payee?.coins[s.coinAt])
-      void follow(s.payment.id)
+      s.note = (await job()) ?? null
+      s.me = await client.me()
     } catch (e) {
-      s.error = e instanceof Error ? e.message : String(e)
+      s.note = e instanceof Error ? e.message : String(e)
     } finally {
-      s.busy = false
+      s.busy = null
+      s.selected = Math.min(s.selected, rows(s).length - 1)
       app.invalidate()
     }
   }
+  const refresh = () => act('Reading…', async () => {})
   app.on('key', (event: any) => {
     const action = onKey(s, event)
-    if (action === 'quit') app.quit()
-    else if (action === 'lookup') void lookup()
-    else if (action === 'pay') void pay()
+    const row = rows(s)[s.selected]
+    if (action === 'quit') return app.quit()
+    if (action === 'refresh') void refresh()
+    if (action === 'toggle-ad' && row?.kind === 'ad') void act(row.item.wanted === 'active' ? 'Pausing…' : 'Starting…', async () => void (await client.updateAd(row.item.ref, { running: row.item.wanted !== 'active' })))
+    if (action === 'withdraw' && row?.kind === 'site') void act('Withdrawing…', async () => {
+      const r = await client.withdraw(row.item.site)
+      return `${money(r.amount_usd)} ${r.status === 'requested' ? 'queued' : 'sent'}.`
+    })
     app.invalidate()
   })
+  app.on('mouse', (event: any) => {
+    // A move no row claimed clears the hover.
+    if (event?.type === 'move' && s.hovered !== null) {
+      s.hovered = null
+      app.invalidate()
+    }
+  })
   app.render(({ ui, theme }: any) => {
+    const me = s.me
     ui.row({ size: 1 }, (h: any) => {
-      h.text(' pay.agent', { fg: theme.accent, bold: true, size: 11 })
-      h.text('get paid, and pay, in crypto', { fg: theme.muted })
+      h.text(' ad.network', { fg: theme.accent, bold: true, size: 12 })
+      h.text(me ? `balance ${money(me.balance_usd)}` : 'run ads, or earn from your site', { fg: theme.muted })
       h.text(`${client.base.replace(/^https?:\/\//, '')} `, { fg: theme.muted, align: 'right' })
     })
-    const mark = (f: Field) => (s.field === f && !s.payment ? '▏' : '')
-    ui.panel({ title: 'Pay', size: 5 }, (p: any) => {
-      p.text(`to      pay.agent/${s.handle}${mark('handle')}${s.payee ? `   ${s.payee.name}` : ''}`, { fg: s.field === 'handle' ? theme.accent : theme.text })
-      p.text(`amount  $${s.amount}${mark('amount')}`, { fg: s.field === 'amount' ? theme.accent : theme.text })
-      p.text(`coin    ${s.payee?.coins.length ? `‹ ${s.payee.coins[s.coinAt]} ›` : '-'}`, { fg: s.field === 'coin' ? theme.accent : theme.text })
+    const all = rows(s)
+    const nodes = [
+      { label: `${s.open.ads ? '▾' : '▸'} Ads (${me?.ads.length ?? 0})`, color: theme.accent, expanded: s.open.ads, children: (s.open.ads ? me?.ads ?? [] : []).map((a) => ({ label: `${a.name || a.url}`, values: [{ text: a.running ? 'running' : a.wanted === 'active' ? 'no budget' : 'paused', width: 10 }, { text: `${a.clicks} clicks`, width: 12, align: 'right' }, { text: money(a.spent_usd), width: 9, align: 'right' }] })) },
+      { label: `${s.open.sites ? '▾' : '▸'} Sites (${me?.sites.length ?? 0})`, color: theme.accent, expanded: s.open.sites, children: (s.open.sites ? me?.sites ?? [] : []).map((x) => ({ label: x.site, values: [{ text: x.live ? 'live' : 'tag not seen', width: 12 }, { text: `earned ${money(x.earned_usd)}`, width: 16, align: 'right' }] })) },
+    ]
+    visible = []
+    ui.panel({ title: s.busy ?? 'Your ads and sites' }, (p: any) => {
+      p.tree({
+        nodes,
+        selected: s.selected,
+        ...(s.hovered !== null ? { hovered: s.hovered } : {}),
+        followSelection: true,
+        guides: true,
+        scrollbar: true,
+        onRow: (_node: unknown, index: number) => visible.push(index),
+        onSelectRow: (r: number) => {
+          if (visible[r] !== undefined) pick(s, visible[r]!)
+          app.invalidate()
+        },
+        onHoverRow: (r: number | null) => {
+          s.hovered = r === null ? null : (visible[r] ?? null)
+          app.invalidate()
+        },
+        onScroll: (d: number) => {
+          s.selected = Math.max(0, Math.min(all.length - 1, s.selected + d))
+          app.invalidate()
+        },
+      })
     })
-    ui.panel({ title: s.busy ? 'Asking CoinPay…' : s.payment ? `Payment ${s.payment.id}` : 'Send' }, (p: any) => {
-      if (s.error) p.text(s.error, { fg: theme.danger ?? theme.accent })
-      else if (!s.payment) p.text('Type a handle, Tab, an amount, Tab, pick a coin, Enter.', { fg: theme.muted })
-      else {
-        const paid = PAID.includes(s.payment.status)
-        p.text(paid ? 'Paid. Thank you.' : `Send exactly ${s.payment.amount_crypto} ${s.payment.coin.toUpperCase()}`, { fg: paid ? theme.accent : theme.text, bold: true })
-        if (!paid) p.text(`to ${s.payment.address}`, { fg: theme.text })
-        p.text(`status: ${s.payment.status}${s.payment.expires_at ? `   good until ${s.payment.expires_at}` : ''}`, { fg: theme.muted })
-        p.text(s.payment.checkout_url, { fg: theme.muted })
-      }
+    const row = all[s.selected]
+    ui.panel({ title: row?.kind === 'ad' ? row.item.ref : row?.kind === 'site' ? row.item.site : 'Details', size: 6 }, (p: any) => {
+      if (s.note) p.text(s.note, { fg: theme.accent })
+      if (row?.kind === 'ad') {
+        p.text(`${row.item.headline}`, { bold: true })
+        p.text(`${row.item.views} views · ${row.item.clicks} clicks · ${money(row.item.spent_usd)} spent · ${money(row.item.daily_usd)}/day`, { fg: theme.muted })
+        p.text(row.item.page, { fg: theme.muted })
+      } else if (row?.kind === 'site') {
+        p.text(`earned ${money(row.item.earned_usd)} · withdrawable ${money(row.item.withdrawable_usd)}`, { bold: true })
+        p.text(row.item.wallet ? `pays ${row.item.coin} ${row.item.wallet}` : 'no wallet yet: adnetwork wallet <site> <address>', { fg: theme.muted })
+        p.text(row.item.page, { fg: theme.muted })
+      } else if (!me) p.text('Reading your account…', { fg: theme.muted })
+      else p.text('New ad: adnetwork run <url> · new site: adnetwork site <example.com>', { fg: theme.muted })
     })
-    ui.statusBar({ items: s.payment ? [{ key: 'Esc', label: 'new payment' }, { key: 'Ctrl+C', label: 'quit' }] : [{ key: 'Tab', label: 'next' }, { key: '←→', label: 'coin' }, { key: 'Enter', label: 'pay' }, { key: 'Esc', label: 'quit' }], right: [{ label: 'payments by CoinPay' }] })
+    const keys = [{ key: '↑↓', label: 'move' }, { key: 'Enter', label: 'open' }, { key: 'r', label: 'refresh' }]
+    if (row?.kind === 'ad') keys.push({ key: 'p', label: row.item.wanted === 'active' ? 'pause' : 'run' })
+    if (row?.kind === 'site') keys.push({ key: 'w', label: 'withdraw' })
+    keys.push({ key: 'q', label: 'quit' })
+    ui.statusBar({ items: keys, right: [{ label: 'ads by crawlproof' }] })
   })
+  void refresh()
   await app.start()
 }
