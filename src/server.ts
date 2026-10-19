@@ -515,7 +515,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   startRingRefresh()
   net.startSweep()
   return Bun.serve({
-    port: options.port ?? Number(env.PORT ?? 8798),
+    port: options.port ?? Number(env.PORT ?? 8800),
     hostname: options.hostname ?? env.HOST ?? '127.0.0.1',
     idleTimeout: 180,
     fetch(request, srv) {

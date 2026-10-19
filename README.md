@@ -50,7 +50,7 @@ Settings: `ADNETWORK_KEY` (seals CoinPay tokens, signs claim codes),
 `ADNETWORK_COINPAY_CLIENT_ID` / `_SECRET` (CoinPay OAuth client, scopes
 `openid profile email wallet:read`), `ADNETWORK_ADVERTISER_TOKEN` /
 `ADNETWORK_PUBLISHER_TOKEN` (crawlproof API tokens; the advertiser account must be
-in crawlproof's `ADS_PARTNER_USER_IDS`), `ADNETWORK_DB`, `PORT` (8798),
+in crawlproof's `ADS_PARTNER_USER_IDS`), `ADNETWORK_DB`, `PORT` (8800),
 `CRAWLPROOF_URL`, `CRAWLPROOF_SITE_ID` (analytics), `ADNETWORK_ORIGIN`.
 
 Deploy: `bin/install.sh` (OpenInstall) on dev2, vault `profullstack/ad-network--prod`;
