@@ -519,7 +519,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'
   startRingRefresh()
-  startPitFooterRefresh('ad.network')
+  startPitFooterRefresh('ad.network.pit.world')
   startRingFooterRefresh()
   net.startSweep()
   return Bun.serve({
