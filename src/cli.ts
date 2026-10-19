@@ -1,95 +1,169 @@
 /**
- * payagent: pay.agent from the terminal.
- *
- *   payagent                          the TUI
- *   payagent <handle> <usd> [coin]    pay someone: prints the address and exact amount
- *   payagent who <handle>             who they are and which coins they take
- *   payagent status <payment-id> [--wait]
- *   payagent me                       your link and payments (PAYAGENT_KEY)
- *   payagent mcp                      MCP server on stdio
- *   payagent serve [--port N]         run your own pay.agent
+ * adnetwork: ad.network from the terminal. Advertise or publish in one line.
  */
-import { PAID, PayAgentClient } from './client.js'
+import { AdNetworkClient, type ApiAd, type ApiSite } from './client.js'
 import { VERSION } from './version.js'
 
-export const HELP = `payagent ${VERSION}: get paid, and pay, in crypto (https://pay.agent)
+export const HELP = `adnetwork ${VERSION}: run ads, or earn from your site, in crypto (https://ad.network.pit.world)
 
-  payagent                          interactive (TUI)
-  payagent <handle> <usd> [coin]    pay someone: address + exact amount (coin e.g. usdc_sol)
-  payagent who <handle>             their name and the coins they take
-  payagent status <id> [--wait]     a payment's status; --wait until it settles
-  payagent me                       your link and payments (PAYAGENT_KEY=pa_…)
-  payagent mcp                      MCP server: claude mcp add payagent -- bunx @profullstack/payagent mcp
-  payagent serve [--port N]         run your own instance
+  adnetwork                                  interactive (TUI)
+  adnetwork me                               balance, ads and sites
 
-  --json                            machine-readable output
-  PAYAGENT_URL=https://…            another instance (default https://pay.agent.pit.world)
+ Advertise
+  adnetwork run <url> [--daily 5]            a new ad for that page
+  adnetwork fund <usd> [coin]                add budget: prints the address + exact amount (coin e.g. usdc_sol)
+  adnetwork deposit <id> [--wait]            a deposit's status; --wait until it lands
+  adnetwork ads                              your ads
+  adnetwork ad <ref>                         one ad, fresh numbers
+  adnetwork pause|resume <ref>
+  adnetwork budget <ref> <usd-per-day>
+  adnetwork delete <ref>
+
+ Publish
+  adnetwork site <example.com>               add a site: prints the tag to paste
+  adnetwork sites                            your sites and earnings
+  adnetwork check <site>                     look for your tag now
+  adnetwork wallet <site> <address> [coin]   where you get paid (usdc_pol, usdc_sol, usdc_base, usdc_eth)
+  adnetwork withdraw <site>
+  adnetwork remove <site>
+
+  adnetwork mcp                              MCP server: claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp
+  adnetwork serve [--port N]                 run your own instance
+
+  --json                                     machine-readable output
+  ADNETWORK_KEY=an_…                         your key, from https://ad.network.pit.world/me
 `
 
 type Out = { log(text: string): void; error(text: string): void }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const money = (n: number) => `$${n.toFixed(2)}`
 
-export async function main(argv = process.argv.slice(2), out: Out = console, client = new PayAgentClient()): Promise<number> {
+export const adLine = (a: ApiAd) => `${a.ref.padEnd(20)} ${(a.running ? 'running' : a.wanted === 'active' ? 'no budget' : 'paused').padEnd(10)} ${money(a.daily_usd)}/day  ${String(a.views).padStart(7)} views ${String(a.clicks).padStart(5)} clicks  ${money(a.spent_usd)} spent  ${a.url}`
+export const siteLine = (s: ApiSite) => `${s.site.padEnd(28)} ${(s.live ? 'live' : 'tag not seen').padEnd(13)} earned ${money(s.earned_usd)}  withdrawable ${money(s.withdrawable_usd)}  ${s.wallet ? `→ ${s.coin} ${s.wallet}` : 'no wallet'}`
+
+/** --name value or --name=value. */
+export function flag(argv: string[], name: string): string | undefined {
+  const i = argv.indexOf(`--${name}`)
+  if (i >= 0) return argv[i + 1]
+  return argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
+}
+
+export async function main(argv = process.argv.slice(2), out: Out = console, client = new AdNetworkClient()): Promise<number> {
   const json = argv.includes('--json')
   const wait = argv.includes('--wait')
-  const args = argv.filter((a) => !a.startsWith('--'))
+  const daily = flag(argv, 'daily')
+  const port = flag(argv, 'port')
+  const args = argv.filter((a, i) => !a.startsWith('--') && !['--daily', '--port'].includes(argv[i - 1] ?? ''))
   const [command, ...rest] = args
   const show = (value: unknown, text: string) => out.log(json ? JSON.stringify(value, null, 2) : text)
+  const need = (v: string | undefined, what: string) => {
+    if (!v) throw new Error(`missing ${what}\n\n${HELP}`)
+    return v
+  }
   try {
-    if (!command) {
-      if (!process.stdout.isTTY) return out.log(HELP), 0
-      const { runTui } = await import('./tui.js')
-      await runTui(client)
-      return 0
-    }
     switch (command) {
+      case undefined: {
+        if (!process.stdout.isTTY) return out.log(HELP), 0
+        const { runTui } = await import('./tui.js')
+        await runTui(client)
+        return 0
+      }
       case 'help':
-        out.log(HELP)
-        return 0
+        return out.log(HELP), 0
       case 'version':
-        out.log(VERSION)
-        return 0
+        return out.log(VERSION), 0
       case 'mcp': {
         const { runMcp } = await import('./mcp.js')
         await runMcp(client)
         return 0
       }
       case 'serve': {
-        const i = argv.indexOf('--port')
         const { serve } = await import('./server.js')
-        const s = serve(i >= 0 ? { port: Number(argv[i + 1]) } : {})
-        out.log(`pay.agent listening on http://${s.hostname}:${s.port}`)
+        const s = serve(port ? { port: Number(port) } : {})
+        out.log(`ad.network listening on http://${s.hostname}:${s.port}`)
         return await new Promise<number>(() => {})
-      }
-      case 'who': {
-        const u = await client.user(rest[0] ?? '')
-        show(u, `${u.name || u.handle}  ${u.url}\ntakes: ${u.coins.join(', ') || 'nothing yet'}`)
-        return 0
       }
       case 'me': {
         const me = await client.me()
-        show(me, `${me.url}\n${me.payments.map((p) => `${p.created_at.slice(0, 16)}  $${p.amount_usd}  ${p.coin}  ${p.status}  ${p.note}`).join('\n') || 'no payments yet'}`)
+        show(me, `${me.email}  balance ${money(me.balance_usd)}\n\nAds\n${me.ads.map(adLine).join('\n') || '  none'}\n\nSites\n${me.sites.map(siteLine).join('\n') || '  none'}`)
         return 0
       }
-      case 'status': {
-        let p = await client.payment(rest[0] ?? '')
-        while (wait && !['confirmed', 'forwarded', 'completed', 'expired', 'failed'].includes(p.status)) {
-          await sleep(5000)
-          p = await client.payment(p.id)
+      case 'run': {
+        const a = await client.run(need(rest[0], 'a link'), daily ? Number(daily) : 5)
+        show(a, `${a.ref}: ${a.headline || a.name}\n${a.running ? 'Running.' : `Ready. Add budget to start it: adnetwork fund 25 usdc_sol`}\n${a.page}`)
+        return 0
+      }
+      case 'fund': {
+        const d = await client.fund(Number(need(rest[0], 'an amount in USD')), rest[1])
+        show(d, `Send exactly ${d.amount_crypto} ${d.coin.toUpperCase()} to\n${d.address}\n\n${d.expires_at ? `Good until ${d.expires_at}. ` : ''}Watch it: adnetwork deposit ${d.id} --wait\n${d.page}`)
+        return 0
+      }
+      case 'deposit': {
+        let d = await client.deposit(need(rest[0], 'a deposit id'))
+        while (wait && d.status === 'pending') {
+          await sleep(10_000)
+          d = await client.deposit(d.id)
         }
-        show(p, `${p.id}: ${PAID.includes(p.status) ? 'paid' : p.status}`)
-        return PAID.includes(p.status) || !wait ? 0 : 1
+        show(d, `${d.id}: ${d.status === 'complete' ? `${money(d.amount_usd)} added` : d.status}`)
+        return d.status === 'complete' || !wait ? 0 : 1
+      }
+      case 'ads': {
+        const me = await client.me()
+        show(me.ads, me.ads.map(adLine).join('\n') || 'No ads yet: adnetwork run <url>')
+        return 0
+      }
+      case 'ad': {
+        const a = await client.ad(need(rest[0], 'an ad ref'))
+        show(a, `${adLine(a)}\n\n${a.headline}\n${a.body}\n${a.page}`)
+        return 0
+      }
+      case 'pause':
+      case 'resume': {
+        const a = await client.updateAd(need(rest[0], 'an ad ref'), { running: command === 'resume' })
+        show(a, adLine(a))
+        return 0
+      }
+      case 'budget': {
+        const a = await client.updateAd(need(rest[0], 'an ad ref'), { daily_usd: Number(need(rest[1], 'USD per day')) })
+        show(a, adLine(a))
+        return 0
+      }
+      case 'delete': {
+        show(await client.deleteAd(need(rest[0], 'an ad ref')), 'Deleted.')
+        return 0
+      }
+      case 'site': {
+        const s = await client.addSite(need(rest[0], 'a site'))
+        show(s, `Paste this into ${s.site}, before </body>:\n\n${s.tag}\n\nThen: adnetwork wallet ${s.site} <your USDC address>`)
+        return 0
+      }
+      case 'sites': {
+        const me = await client.me()
+        show(me.sites, me.sites.map(siteLine).join('\n') || 'No sites yet: adnetwork site <example.com>')
+        return 0
+      }
+      case 'check': {
+        const s = await client.checkSite(need(rest[0], 'a site'))
+        show(s, siteLine(s))
+        return 0
+      }
+      case 'wallet': {
+        const s = await client.setWallet(need(rest[0], 'a site'), need(rest[1], 'a wallet address'), rest[2])
+        show(s, siteLine(s))
+        return 0
+      }
+      case 'withdraw': {
+        const r = await client.withdraw(need(rest[0], 'a site'))
+        show(r, `${money(r.amount_usd)} ${r.status === 'requested' ? 'queued' : 'sent'}.`)
+        return 0
+      }
+      case 'remove': {
+        show(await client.removeSite(need(rest[0], 'a site')), 'Ads stopped.')
+        return 0
       }
     }
-    // payagent <handle> <usd> [coin] [note…]
-    const [handle, usd, coin, ...note] = args
-    if (!usd || !Number.isFinite(Number(usd))) {
-      out.error(`payagent: unknown command "${command}"\n\n${HELP}`)
-      return 2
-    }
-    const p = await client.pay(handle!, Number(usd), coin, note.join(' ') || undefined)
-    show(p, `Send exactly ${p.amount_crypto} ${p.coin.toUpperCase()} to\n${p.address}\n\nGood until ${p.expires_at ?? 'an hour from now'}. Watch it: payagent status ${p.id} --wait\n${p.checkout_url}`)
-    return 0
+    out.error(`adnetwork: unknown command "${command}"\n\n${HELP}`)
+    return 2
   } catch (error) {
     out.error(error instanceof Error ? error.message : String(error))
     return 1

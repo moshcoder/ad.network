@@ -1,47 +1,38 @@
 /**
- * Server-rendered pages. One small script (public/pay.js) copies addresses and
- * follows a payment's status; everything works without it except the live update.
+ * Server-rendered pages. One small script (public/app.js) copies text and
+ * follows a deposit's status; everything works without it except the live update.
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { COINS, type OnboardStep } from '@profullstack/coinpay-onboard'
-import type { PaymentRow, User } from './db.js'
+import type { Campaign, DepositRow, Site, User, Withdrawal } from './db.js'
 import { RING_PLACEHOLDER } from './ring.js'
-import { coinName, PAID } from './service.js'
+import { CLICK_CENTS, coinName, DEPOSIT_COINS, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd } from './service.js'
 
-export const SITE = 'https://pay.agent'
-export const REPO = 'https://github.com/moshcoder/pay.agent'
+export const SITE = 'https://ad.network.pit.world'
+export const REPO = 'https://github.com/moshcoder/ad.network'
+const CRAWLPROOF = 'https://crawlproof.com'
 const COINPAY = 'https://coinpayportal.com'
 
-/** crawlproof analytics: one async script on every page. */
-const TRACKER = '<script data-site="88fcc3cd-2374-47da-8fbb-5cc2ae2e7499" src="https://crawlproof.com/stats.js" async></script>'
-
-/**
- * A crawlproof ad: a cross-origin, sandboxed iframe, so it can never read the
- * page. Only on public pages where nobody is paying, signing in or typing an
- * address. CRAWLPROOF_AD_SLOT overrides the slot; 'off' turns ads off.
- */
-export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? 'b479d9b7-3843-44f3-86f7-bbf0b4f76675'
-export const adUnit = (format: 'banner_300x250' | 'text_link') =>
-  AD_SLOT === 'off' ? '' : `<div class="ad-unit ad-${format}"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
+/** crawlproof analytics: one async script on every page. CRAWLPROOF_SITE_ID overrides; 'off' drops it. */
+const TRACKER_SITE = process.env.CRAWLPROOF_SITE_ID ?? ''
+const TRACKER = TRACKER_SITE && TRACKER_SITE !== 'off' ? `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>` : ''
 
 const asset = (name: string) => {
   const body = readFileSync(new URL(`../public/${name}`, import.meta.url))
   return `/${name}?v=${createHash('sha256').update(body).digest('hex').slice(0, 10)}`
 }
 const STYLE_URL = asset('style.css')
-const SCRIPT_URL = asset('pay.js')
+const SCRIPT_URL = asset('app.js')
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
-const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`
+const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ')
 
-const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 23V9h8a5 5 0 0 1 0 10h-8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="23.5" cy="23.5" r="2.5" fill="currentColor"/></svg>`
+const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.4" fill="currentColor"/><path d="M10.3 21.7a8 8 0 0 1 0-11.4M21.7 10.3a8 8 0 0 1 0 11.4M6.1 25.9a14 14 0 0 1 0-19.8M25.9 6.1a14 14 0 0 1 0 19.8" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>`
 
-export type Ctx = { user: User | null; origin: string; csrf: string }
+export type Ctx = { user: User | null; csrf: string }
 
-/** ads: a text-link ad above the footer. Leave it off wherever someone pays, signs in or enters anything. */
-type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; script?: boolean; ads?: boolean }
+type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; script?: boolean }
 
 function layout(o: LayoutOptions): string {
   const signedIn = Boolean(o.ctx.user)
@@ -57,7 +48,7 @@ function layout(o: LayoutOptions): string {
 <meta name="theme-color" content="#07090c">
 ${o.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${esc(SITE + o.path)}">`}
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="pay.agent">
+<meta property="og:site_name" content="ad.network">
 <meta property="og:title" content="${esc(o.title)}">
 <meta property="og:description" content="${esc(o.description)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -68,237 +59,290 @@ ${TRACKER}
 <body>
 ${RING_PLACEHOLDER}
 <header class="top">
-  <a class="brand" href="/">${LOGO}<span>pay<b>.</b>agent</span></a>
+  <a class="brand" href="/">${LOGO}<span>ad<b>.</b>network</span></a>
   <nav aria-label="Site">
+    <a href="/advertise">Advertise</a>
+    <a href="/publish">Publish</a>
     <a href="/help">Help</a>
-    <a href="/help#agents">Agents</a>
-    ${signedIn ? `<a href="/me">My link</a><form method="post" action="/auth/logout"><input type="hidden" name="csrf" value="${esc(o.ctx.csrf)}"><button class="linkish">Sign out</button></form>` : '<a href="/auth/start">Sign in</a>'}
+    ${signedIn ? `<form method="post" action="/auth/logout"><input type="hidden" name="csrf" value="${esc(o.ctx.csrf)}"><button class="linkish">Sign out</button></form>` : '<a href="/auth/start">Sign in</a>'}
   </nav>
 </header>
 <main>
 ${o.body}
 </main>
-${o.ads ? adUnit('text_link') : ''}
 <footer>
-  <span>pay.agent: get paid in crypto with one link. Payments by <a href="${COINPAY}">CoinPay</a>.</span>
-  <span><a href="/help">Help</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
+  <span>ad.network: run ads, or earn from your site, in crypto. Ads by <a href="${CRAWLPROOF}">crawlproof</a>, payments by <a href="${COINPAY}">CoinPay</a>.</span>
+  <span><a href="/help">Help</a> · <a href="/help#agents">API, CLI, MCP</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
 </footer>
 </body>
 </html>`
 }
 
+const csrfField = (ctx: Ctx) => `<input type="hidden" name="csrf" value="${esc(ctx.csrf)}">`
+const flashNote = (flash?: string, error = false) => (flash ? `<p class="note${error ? ' error' : ''}">${esc(flash)}</p>` : '')
+
 export function homePage(ctx: Ctx): string {
   return layout({
     ctx,
-    title: 'pay.agent: get paid in crypto with one link',
-    description: 'Your own pay link in a minute. Anyone, person or agent, pays you in USDC, BTC, ETH, SOL and more, straight to your CoinPay wallet or business.',
+    title: 'ad.network: run ads or earn from your site, in crypto',
+    description: 'The simple ad network. Advertisers paste a link and a daily budget. Publishers paste one tag and get paid to their wallet. Crypto in, crypto out.',
     path: '/',
-    ads: true,
     body: `<section class="hero">
-  <h1>Get paid in crypto.<br>One link.</h1>
-  <p class="tag">Sign in with CoinPay, pick a name, and share <b>pay.agent/you</b>. People and agents pay you in USDC, BTC, ETH, SOL and more. It lands in your CoinPay wallet or business.</p>
-  <a class="btn big" href="${ctx.user ? (ctx.user.handle ? '/me' : '/start') : '/auth/start'}">${ctx.user ? (ctx.user.handle ? 'Open my link' : 'Finish setting up') : 'Start with CoinPay'}</a>
-  <p class="muted small">No CoinPay account? You make one on the way. Free to set up.</p>
+  <h1>Ads, the simple way.</h1>
+  <p class="tag">Paste a link and a daily budget, and your ad runs across the network. Or paste one tag into your site and get paid to your wallet. Crypto in, crypto out, no forms.</p>
 </section>
+<div class="grid2">
+  <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.</p><span class="btn">Run an ad</span></a>
+  <a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Name your site, paste one tag before <code>&lt;/body&gt;</code>, add a wallet. Withdraw what you earn whenever it passes ${usd(MIN_PAYOUT_CENTS)}.</p><span class="btn">Earn from my site</span></a>
+</div>
 <div class="grid3">
-  <div class="card"><h2><span class="step-n">1</span>Sign in</h2><p class="muted">With your CoinPay account. We set up everything CoinPay needs for you.</p></div>
-  <div class="card"><h2><span class="step-n">2</span>Pick a name</h2><p class="muted"><code>pay.agent/yourname</code>, and where the money goes: your wallet or your business.</p></div>
-  <div class="card"><h2><span class="step-n">3</span>Share it</h2><p class="muted">Paste it anywhere. Payers pick an amount and a coin, scan, done. You see it arrive.</p></div>
+  <div class="card"><h2><span class="step-n">1</span>Sign in</h2><p class="muted">With your CoinPay account (free; you can make one on the way).</p></div>
+  <div class="card"><h2><span class="step-n">2</span>One field</h2><p class="muted">A link to advertise, or a site to earn from. That is the whole setup.</p></div>
+  <div class="card"><h2><span class="step-n">3</span>Crypto</h2><p class="muted">Advertisers top up in crypto. Publishers are paid in USDC to their own wallet.</p></div>
 </div>
 <div class="card" id="agents">
   <h2>Built for agents too</h2>
-  <p class="muted">Every pay link is an API. An agent asks for an address and an exact amount, pays, and checks it landed:</p>
-  <pre>curl -X POST https://pay.agent/api/v1/users/alice/payments \\
-  -H 'content-type: application/json' -d '{"amount_usd": 5, "coin": "usdc_sol"}'</pre>
-  <p class="muted small">Also a CLI (<code>bunx @profullstack/payagent</code>) and an MCP server (<code>bunx @profullstack/payagent mcp</code>). <a href="/help#agents">How</a></p>
-</div>
-${adUnit('banner_300x250')}`,
+  <p class="muted">Everything is an API, a CLI and an MCP server. An agent can run its own ads:</p>
+  <pre>bunx @profullstack/adnetwork run https://example.com --daily 5
+bunx @profullstack/adnetwork fund 25 usdc_sol
+claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre>
+  <p class="muted small"><a href="/help#agents">API and keys</a></p>
+</div>`,
   })
 }
 
 export function helpPage(ctx: Ctx): string {
-  const coins = COINS.map((c) => `<code>${esc(c.id)}</code> ${esc(c.name)}`).join('<br>')
   return layout({
     ctx,
-    title: 'Help · pay.agent',
-    description: 'How pay.agent works: Sign in with CoinPay, your pay link, coins, fees, agents, and the API.',
+    title: 'Help · ad.network',
+    description: 'How ad.network works for advertisers and publishers: budgets, prices, payouts, the API, CLI and MCP.',
     path: '/help',
-    ads: true,
-    body: `<section class="hero"><h1>Help</h1><p class="tag">Everything about pay.agent on one page.</p></section>
-<div class="card"><h2>What is it?</h2><p>pay.agent gives you a link, <code>pay.agent/yourname</code>, that anyone can pay in crypto. It is a simple front door to <a href="${COINPAY}">CoinPay</a>, which holds the addresses and moves the money. pay.agent never holds your funds.</p></div>
-<div class="card"><h2>Getting started</h2><ol>
-  <li><a href="/auth/start">Sign in with CoinPay</a> (or make a CoinPay account; it takes a minute).</li>
-  <li>Pick your name.</li>
-  <li>Choose where money lands:
-    <ul><li><b>My CoinPay wallet</b>: payments go to your CoinPay account's payout addresses. We make a small CoinPay business named <code>pay.agent/yourname</code> to take them; you do not have to do anything with it.</li>
-    <li><b>My CoinPay business</b>: payments go to a business you already run on CoinPay, using its payout wallets and keeping its settings.</li></ul></li>
-  <li>No payout address yet? Paste one during setup (for example a Solana address for USDC on Solana). You can add more later in CoinPay and press <b>Re-check coins</b>.</li>
-</ol></div>
-<div class="card"><h2>Paying someone</h2><p>Open their link, enter an amount in dollars, pick a coin, and send exactly the amount shown to the address shown (scan the QR code with your wallet). The page turns green when CoinPay sees the payment. Each payment address is good for one hour.</p></div>
-<div class="card"><h2>Fees</h2><p>pay.agent adds no fee. CoinPay takes its normal fee when it forwards the payment to you, and the payer pays their own network fee.</p></div>
-<div class="card"><h2>Coins</h2><p class="small">${coins}</p><p class="muted small">A link only offers coins its owner has a payout address for.</p></div>
-<div class="card" id="agents"><h2>Agents, API, CLI, MCP</h2>
-<p>Every link is an API, no key needed to pay someone:</p>
-<pre>GET  /api/v1/users/:handle                 who, and which coins
-POST /api/v1/users/:handle/payments        {"amount_usd": 5, "coin": "usdc_sol", "note": "thanks"}
-                                           -> {id, address, amount_crypto, coin, expires_at, checkout_url}
-GET  /api/v1/payments/:id                  status: pending, confirmed, forwarded, expired</pre>
-<p>Your own payments, with the API key from <a href="/me">My link</a>:</p>
-<pre>GET  /api/v1/me                            -H 'authorization: Bearer pa_…'</pre>
-<pre>bunx @profullstack/payagent alice 5 usdc_sol              pay alice $5 in USDC on Solana
-bunx @profullstack/payagent status &lt;payment-id&gt;
-bunx @profullstack/payagent                               the TUI
-claude mcp add payagent -- bunx @profullstack/payagent mcp</pre></div>
-<div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, your handle, which business your link pays, and your CoinPay sign-in (encrypted). Payments to you are listed for you only. Sign out removes the session; to delete everything, use <b>Delete my link</b> on <a href="/me">My link</a>.</p></div>
-<div class="card"><h2>Reaching pay.agent</h2><p><code>pay.agent</code> is a <a href="https://pit.world">Moshpit</a> name. Without Moshpit DNS, use <a href="https://pay.agent.pit.world/">pay.agent.pit.world</a>: the same site.</p></div>`,
+    body: `<section class="hero"><h1>Help</h1><p class="tag">Everything about ad.network on one page.</p></section>
+<div class="card"><h2>What is it?</h2><p>ad.network is the simple front door to the <a href="${CRAWLPROOF}/ads">crawlproof</a> ad network. crawlproof writes the ads, runs the auction, serves them across its sites and counts honestly (bots and repeat clicks are not charged). <a href="${COINPAY}">CoinPay</a> moves the money. You sign in with CoinPay; there is no other account.</p></div>
+<div class="card" id="advertisers"><h2>Advertisers</h2><ol>
+  <li><a href="/advertise">Paste a link</a> and pick a daily budget ($${MIN_DAILY_USD} to $${MAX_DAILY_USD}). We read the page and write the ad: headline, text and a banner.</li>
+  <li>Add budget: pick an amount (from $${MIN_DEPOSIT_USD}) and a coin, send the exact amount to the address shown. Your ads start as soon as it arrives.</li>
+  <li>You pay for clicks, about ${usd(CLICK_CENTS)} each, never for views. The bid adjusts itself to spend your daily budget evenly.</li>
+  <li>When your balance runs out your ads pause. Add more and they start again. Pause, change the budget or delete an ad any time.</li>
+</ol><p class="muted small">Your balance is what you added minus what your ads spent. We check every few minutes, so an ad can run a few cents past zero; that is on us.</p></div>
+<div class="card" id="publishers"><h2>Publishers</h2><ol>
+  <li><a href="/publish">Name your site</a>. You get one tag to paste before <code>&lt;/body&gt;</code>. It shows a 300×250 ad and counts visits.</li>
+  <li>Publish the page. We look for your tag (it carries a code that is yours alone), or press <b>Check my site</b>.</li>
+  <li>Add a wallet for USDC (Polygon, Solana, Base or Ethereum).</li>
+  <li>You earn about 5¢ of every ${usd(CLICK_CENTS)} paid click on your site. Withdraw any time you have ${usd(MIN_PAYOUT_CENTS)} or more; it goes straight from crawlproof to your wallet.</li>
+</ol><p class="muted small">Someone else claimed your site? If they never placed their tag, add <code>&lt;meta name="ad.network" content="your code"&gt;</code> (the code is shown when you try) and claim it again.</p></div>
+<div class="card"><h2>Fees</h2><p>ad.network adds none. crawlproof keeps 30% of the publisher side of each click; the network fee for sending crypto is the sender's, as always.</p></div>
+<div class="card" id="agents"><h2>Agents: API, CLI, MCP</h2>
+<p>Make a key on <a href="/me">your page</a>, then:</p>
+<pre>GET    /api/v1/me                         balance, ads, sites
+POST   /api/v1/ads                        {"url": "https://…", "daily_usd": 5}
+GET    /api/v1/ads/:ref                   one ad, fresh numbers
+PATCH  /api/v1/ads/:ref                   {"running": false} or {"daily_usd": 10}
+DELETE /api/v1/ads/:ref
+POST   /api/v1/deposits                   {"amount_usd": 25, "coin": "usdc_sol"} -> address + exact amount
+GET    /api/v1/deposits/:id               pending, complete or failed
+POST   /api/v1/sites                      {"site": "example.com"} -> the tag to paste
+GET    /api/v1/sites/:site
+POST   /api/v1/sites/:site/check          look for the tag now
+PATCH  /api/v1/sites/:site                {"wallet": "0x…", "coin": "usdc_pol"}
+POST   /api/v1/sites/:site/withdraw
+DELETE /api/v1/sites/:site
+
+-H 'authorization: Bearer an_…'</pre>
+<pre>curl -fsSL ${SITE}/install.sh | sh          installs the adnetwork CLI (needs bun)
+adnetwork                                  the TUI
+adnetwork run https://example.com --daily 5
+adnetwork fund 25 usdc_sol
+adnetwork site example.com
+claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre></div>
+<div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, your sign-in (encrypted), which ads and sites are yours, and your deposits. Delete it all on <a href="/me">your page</a>.</p></div>
+<div class="card"><h2>Reaching ad.network</h2><p>It lives at <a href="${SITE}/">ad.network.pit.world</a>, part of the <a href="https://pit.world">Moshpit</a> network.</p></div>`,
   })
 }
 
-export function wizardPage(ctx: Ctx, o: { businesses: { id: string; name: string }[]; accountCoins: string[]; error?: { message: string; field?: string }; values?: Record<string, string>; coinpayError?: string }): string {
+// ---- advertisers ---------------------------------------------------------------
+
+function adRow(c: Campaign): string {
+  const shown = c.status === 'active' ? 'running' : c.status === 'draft' ? 'waiting for budget' : c.wanted === 'active' ? 'paused: no budget' : 'paused'
+  return `<tr><td><a href="/ads/${esc(c.ref)}">${esc(c.name || c.url)}</a><br><span class="muted small">${esc(c.url)}</span></td><td>${usd(c.dailyBudgetCents)}/day</td><td>${c.impressions.toLocaleString('en-US')}</td><td>${c.clicks.toLocaleString('en-US')}</td><td>${usd(c.spentCents)}</td><td><span class="status ${esc(c.status)}">${esc(shown)}</span></td></tr>`
+}
+
+function fundForm(ctx: Ctx, values: { amount?: string; coin?: string } = {}): string {
+  return `<form method="post" action="/advertise/fund" class="row">${csrfField(ctx)}
+  <input name="amount" inputmode="decimal" placeholder="Amount (USD)" value="${esc(values.amount ?? '25')}" aria-label="Amount in USD">
+  <select name="coin" aria-label="Coin">${DEPOSIT_COINS.map((c) => `<option value="${esc(c)}" ${values.coin === c ? 'selected' : ''}>${esc(coinName(c))}</option>`).join('')}</select>
+  <button class="btn">Add budget</button></form>`
+}
+
+export function advertisePage(ctx: Ctx, o: { balanceCents: number; campaigns: Campaign[]; deposits: DepositRow[]; flash?: string; error?: string; values?: Record<string, string> }): string {
   const v = o.values ?? {}
-  const hasWallets = o.accountCoins.length > 0
-  const suggested = (ctx.user?.name || ctx.user?.email.split('@')[0] || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '').slice(0, 30)
-  const mode = v.mode ?? 'wallet'
   return layout({
     ctx,
     noindex: true,
-    title: 'Set up your link · pay.agent',
-    description: 'Pick your pay.agent name and where payments land.',
-    path: '/start',
-    body: `<section class="hero"><h1>Your pay link</h1><p class="tag">Two choices and you are done. We set up everything on CoinPay for you.</p></section>
-${o.error ? `<p class="note error">${esc(o.error.message)}</p>` : ''}
-${o.coinpayError ? `<p class="note">${esc(o.coinpayError)}</p>` : ''}
-<form method="post" action="/start" class="card">
-  <input type="hidden" name="csrf" value="${esc(ctx.csrf)}">
-  <h2><span class="step-n">1</span>Your name</h2>
-  <label for="handle">Your link</label>
-  <div class="handle-input"><span>pay.agent/</span><input id="handle" name="handle" required minlength="2" maxlength="30" pattern="[a-z0-9][a-z0-9_\\-]{1,29}" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(v.handle ?? suggested)}"></div>
-  <h2 style="margin-top:1.4rem"><span class="step-n">2</span>Where money lands</h2>
-  <label class="choice"><input type="radio" name="mode" value="wallet" ${mode === 'wallet' ? 'checked' : ''}><span><b>My CoinPay wallet</b><span class="muted">Payments go to your CoinPay account's payout addresses.${hasWallets ? ` You have ${esc(o.accountCoins.map(coinName).join(', '))}.` : ''}</span></span></label>
-  ${o.businesses.length
-    ? `<label class="choice"><input type="radio" name="mode" value="business" ${mode === 'business' ? 'checked' : ''}><span><b>My CoinPay business</b><span class="muted">Payments go to a business you run on CoinPay.</span>
-  <select name="business_id" aria-label="Business">${o.businesses.map((b) => `<option value="${esc(b.id)}" ${v.business_id === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></span></label>`
-    : `<p class="muted small">Have a business on CoinPay? It will show up here too.</p>`}
-  <details ${hasWallets ? '' : 'open'} style="margin-top:1rem">
-    <summary>${hasWallets ? 'Add another payout address (optional)' : 'Add a payout address (you need at least one)'}</summary>
-    <p class="muted small">Where CoinPay sends what you are paid. Paste an address from any wallet you control.</p>
-    <div class="row">
-      <select name="address_coin" aria-label="Coin">${COINS.map((c) => `<option value="${c.id}" ${v.address_coin === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
-      <input name="address" placeholder="Address" autocomplete="off" spellcheck="false" value="${esc(v.address ?? '')}">
-    </div>
-    <p class="muted small">Or <a href="${COINPAY}/web-wallet" target="_blank" rel="noopener">make a CoinPay wallet</a>, then come back and press the button.</p>
-  </details>
-  <p style="margin-top:1.4rem"><button class="btn wide big">Make my link</button></p>
-</form>`,
+    title: 'Advertise · ad.network',
+    description: 'Run an ad: paste a link, pick a daily budget, add budget in crypto.',
+    path: '/advertise',
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>Advertise</h1><p class="tag">Balance <b>${usd(Math.max(0, o.balanceCents))}</b>${o.balanceCents <= 0 ? ' · add budget to start your ads' : ''}</p></section>
+${flashNote(o.flash)}${flashNote(o.error, true)}
+<form method="post" action="/advertise" class="card">${csrfField(ctx)}
+  <h2>New ad</h2>
+  <label for="url">Link people land on</label>
+  <input id="url" name="url" required placeholder="https://example.com/your-page" value="${esc(v.url ?? '')}" autocomplete="url" spellcheck="false">
+  <label for="daily">Daily budget (USD)</label>
+  <input id="daily" name="daily" required inputmode="decimal" value="${esc(v.daily ?? '5')}">
+  <p class="muted small">About ${usd(CLICK_CENTS)} a click; $5 a day is roughly 25 clicks. We write the ad from your page; it takes up to a minute.</p>
+  <p><button class="btn wide big">Run my ad</button></p>
+</form>
+<div class="card"><h2>Add budget</h2><p class="muted small">Crypto, from $${MIN_DEPOSIT_USD}. Your ads start the moment it lands.</p>${fundForm(ctx, { amount: v.amount, coin: v.coin })}</div>
+<div class="card"><h2>Your ads</h2>${o.campaigns.length ? `<table><thead><tr><th>Ad</th><th>Budget</th><th>Views</th><th>Clicks</th><th>Spent</th><th></th></tr></thead><tbody>${o.campaigns.map(adRow).join('')}</tbody></table>` : '<p class="muted">None yet.</p>'}</div>
+${o.deposits.length ? `<div class="card"><h2>Deposits</h2><table><thead><tr><th>When</th><th>Amount</th><th>Coin</th><th>Status</th></tr></thead><tbody>${o.deposits.map((d) => `<tr><td>${when(d.createdAt)}</td><td>${usd(d.amountCents)}</td><td>${esc(coinName(d.coin))}</td><td><a class="status ${esc(d.status)}" href="/deposits/${esc(d.id)}">${esc(d.status)}</a></td></tr>`).join('')}</tbody></table></div>` : ''}`,
   })
 }
 
-export function setupDonePage(ctx: Ctx, o: { handle: string; steps: OnboardStep[]; coins: string[] }): string {
+export function adPage(ctx: Ctx, o: { c: Campaign; flash?: string; error?: string }): string {
+  const c = o.c
+  const ctr = c.impressions ? ((c.clicks / c.impressions) * 100).toFixed(1) : '0.0'
   return layout({
     ctx,
     noindex: true,
-    title: 'Your link is ready · pay.agent',
-    description: 'Your pay.agent link is ready.',
-    path: '/start',
-    script: true,
-    body: `<section class="hero"><h1>${o.coins.length ? 'You can get paid.' : 'Almost there.'}</h1>
-<p class="tag">${o.coins.length ? `Share your link. It takes ${esc(o.coins.map(coinName).join(', '))}.` : 'Your link is made, but it needs a payout address before anyone can pay it.'}</p></section>
-<div class="card center">${linkBox(ctx.origin, o.handle)}</div>
-${o.coins.length ? '' : `<p class="note">Add a payout address in <a href="${COINPAY}/dashboard/wallets" target="_blank" rel="noopener">CoinPay</a> (or <a href="/start">here</a>), then press <b>Re-check coins</b> on <a href="/me">My link</a>.</p>`}
-<div class="card"><h2>What we set up on CoinPay</h2><ul class="steps">${o.steps.map((s) => `<li><span class="${s.ok ? 'ok' : 'bad'}">${s.ok ? '✓' : '✗'}</span> ${esc(s.detail)}</li>`).join('')}</ul></div>
-<p class="center"><a class="btn" href="/me">Go to my link</a></p>`,
+    title: `${c.name || c.ref} · ad.network`,
+    description: 'One of your ads.',
+    path: `/ads/${c.ref}`,
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>${esc(c.name || c.ref)}</h1><p class="tag"><a href="${esc(c.url)}" rel="noopener">${esc(c.url)}</a></p></section>
+${flashNote(o.flash)}${flashNote(o.error, true)}
+${c.headline ? `<div class="card ad-preview"><p class="muted small">Your ad</p><p class="ad-headline">${esc(c.headline)}</p><p>${esc(c.body)}</p></div>` : ''}
+<div class="grid3">
+  <div class="card center"><p class="muted small">Views</p><p class="big-number">${c.impressions.toLocaleString('en-US')}</p></div>
+  <div class="card center"><p class="muted small">Clicks</p><p class="big-number">${c.clicks.toLocaleString('en-US')}</p><p class="muted small">${ctr}%</p></div>
+  <div class="card center"><p class="muted small">Spent</p><p class="big-number">${usd(c.spentCents)}</p></div>
+</div>
+<div class="card"><h2>Settings</h2>
+<form method="post" action="/ads/${esc(c.ref)}/budget" class="row">${csrfField(ctx)}<input name="daily" inputmode="decimal" value="${(c.dailyBudgetCents / 100).toFixed(2)}" aria-label="Daily budget"><button class="btn">Set daily budget</button></form>
+<form method="post" action="/ads/${esc(c.ref)}/${c.wanted === 'active' ? 'pause' : 'resume'}">${csrfField(ctx)}<button class="copy">${c.wanted === 'active' ? 'Pause this ad' : 'Run this ad'}</button></form>
+<details><summary>Delete</summary><form method="post" action="/ads/${esc(c.ref)}/delete">${csrfField(ctx)}<button class="copy bad">Delete this ad</button></form><p class="muted small">What it spent stays on your balance.</p></details>
+<p class="muted small">Numbers from ${esc(when(c.syncedAt || c.createdAt))} UTC · ref ${esc(c.ref)}</p></div>
+<p class="center"><a href="/advertise">All my ads</a></p>`,
   })
 }
 
-function linkBox(origin: string, handle: string): string {
-  const url = `${origin}/${handle}`
-  return `<p class="muted small" style="margin:0">Your link</p>
-<p style="font-size:1.4rem;font-weight:800;margin:.3rem 0 .8rem;word-break:break-all"><a href="/${esc(handle)}">${esc(url.replace(/^https:\/\//, ''))}</a></p>
-<div class="address"><code>${esc(url)}</code><button class="copy" type="button" data-copy="${esc(url)}">Copy</button></div>`
-}
-
-export function dashboardPage(ctx: Ctx, o: { user: User; payments: PaymentRow[]; apiKey?: string; qr: string; flash?: string }): string {
-  const u = o.user
-  const received = o.payments.filter((p) => PAID.has(p.status)).reduce((sum, p) => sum + p.amountUsd, 0)
-  return layout({
-    ctx,
-    noindex: true,
-    title: `pay.agent/${u.handle}`,
-    description: 'Your pay.agent link, payments and settings.',
-    path: '/me',
-    script: true,
-    body: `<section class="hero" style="padding-bottom:1rem"><h1>Hi${u.name ? `, ${esc(u.name.split(' ')[0])}` : ''}.</h1><p class="tag">${received ? `${usd(received)} received through your link so far.` : 'Share your link to get paid.'}</p></section>
-${o.flash ? `<p class="note">${esc(o.flash)}</p>` : ''}
-<div class="card center">${linkBox(ctx.origin, u.handle!)}${o.qr}
-<p class="muted small">Takes ${u.coins.length ? esc(u.coins.map(coinName).join(', ')) : '<b>nothing yet: add a payout address</b>'} · pays ${u.mode === 'business' ? `your business <b>${esc(u.businessName)}</b>` : 'your CoinPay wallet'}</p>
-<form method="post" action="/me/recheck"><input type="hidden" name="csrf" value="${esc(ctx.csrf)}"><button class="copy">Re-check coins</button></form></div>
-<div class="card"><h2>Ask for an amount</h2><p class="muted small">A link with the amount filled in.</p>
-<form method="get" action="/${esc(u.handle)}" class="row"><input name="amount" inputmode="decimal" placeholder="Amount (USD)"><input name="note" maxlength="140" placeholder="What for (optional)"><button class="btn">Make link</button></form></div>
-<div class="card"><h2>Payments</h2>${o.payments.length ? `<table><thead><tr><th>When</th><th>Amount</th><th>Coin</th><th>Note</th><th>Status</th></tr></thead><tbody>${o.payments
-      .map((p) => `<tr><td>${esc(new Date(p.createdAt).toISOString().slice(0, 16).replace('T', ' '))}</td><td>${usd(p.amountUsd)}</td><td>${esc(p.coin.toUpperCase())}</td><td>${esc(p.note)}</td><td><a class="status ${esc(p.status)}" href="/p/${esc(p.id)}">${esc(p.status)}</a></td></tr>`)
-      .join('')}</tbody></table>` : '<p class="muted">None yet.</p>'}</div>
-<div class="card"><h2>API key</h2>${o.apiKey ? `<p>Your key, shown once:</p><div class="address"><code>${esc(o.apiKey)}</code><button class="copy" type="button" data-copy="${esc(o.apiKey)}">Copy</button></div>` : `<p class="muted small">For <code>GET /api/v1/me</code>, the CLI and MCP. ${u.apiKeyHash ? 'You have one; making a new one replaces it.' : ''}</p>`}
-<form method="post" action="/me/key"><input type="hidden" name="csrf" value="${esc(ctx.csrf)}"><button class="copy">${u.apiKeyHash ? 'Replace my key' : 'Make a key'}</button></form></div>
-<details class="card"><summary>Change or delete</summary>
-<p><a href="/start">Change my name or where money lands</a></p>
-<form method="post" action="/me/delete"><input type="hidden" name="csrf" value="${esc(ctx.csrf)}"><button class="copy bad">Delete my link and everything pay.agent keeps</button></form>
-<p class="muted small">Your CoinPay account, wallets and businesses stay as they are.</p></details>`,
-  })
-}
-
-export function payPage(ctx: Ctx, o: { payee: User; amount?: string; note?: string; coin?: string; error?: string }): string {
-  const p = o.payee
-  const initial = (p.name || p.handle || '?').trim().charAt(0).toUpperCase()
-  const can = p.coins.length > 0
-  return layout({
-    ctx,
-    title: `Pay ${p.name || p.handle} · pay.agent`,
-    description: `Pay ${p.name || p.handle} in crypto: ${p.coins.map(coinName).join(', ') || 'set up in progress'}.`,
-    path: `/${p.handle}`,
-    body: `<section class="payee"><div class="avatar" aria-hidden="true">${esc(initial)}</div><h1>${esc(p.name || p.handle)}</h1><p class="muted">pay.agent/${esc(p.handle)}</p></section>
-${o.error ? `<p class="note error">${esc(o.error)}</p>` : ''}
-${can ? `<form method="post" action="/${esc(p.handle)}" class="card">
-  <label for="amount" class="center">Amount in USD</label>
-  <input id="amount" class="amount-input" name="amount" required inputmode="decimal" placeholder="0" value="${esc(o.amount ?? '')}" autofocus>
-  <label for="coin">Pay with</label>
-  <select id="coin" name="coin">${p.coins.map((c) => `<option value="${esc(c)}" ${o.coin === c ? 'selected' : ''}>${esc(coinName(c))}</option>`).join('')}</select>
-  <label for="note">What for <span class="muted">(optional)</span></label>
-  <input id="note" name="note" maxlength="140" value="${esc(o.note ?? '')}">
-  <label for="payer">Your name <span class="muted">(optional)</span></label>
-  <input id="payer" name="payer" maxlength="60">
-  <p style="margin-top:1.2rem"><button class="btn wide big">Pay</button></p>
-</form>` : `<p class="note">${esc(p.handle)} cannot take payments yet.</p>`}
-<p class="center muted small">Want your own? <a href="/">Get a pay link</a></p>`,
-  })
-}
-
-export function checkoutPage(ctx: Ctx, o: { payment: PaymentRow; payee: User | null; qr: string }): string {
-  const p = o.payment
-  const paid = PAID.has(p.status)
+export function depositPage(ctx: Ctx, o: { d: DepositRow; qr: string }): string {
+  const d = o.d
+  const paid = d.status === 'complete'
   return layout({
     ctx,
     noindex: true,
     script: true,
-    title: `Pay ${usd(p.amountUsd)} to ${p.handle} · pay.agent`,
+    title: `Add ${usd(d.amountCents)} · ad.network`,
     description: 'Send the exact amount to the address shown.',
-    path: `/p/${p.id}`,
-    body: `<section class="payee" style="padding-top:2rem"><p class="muted" style="margin:0">Paying ${esc(o.payee?.name || p.handle)} · pay.agent/${esc(p.handle)}</p>
-<p class="amount">${usd(p.amountUsd)}</p>${p.note ? `<p class="muted">${esc(p.note)}</p>` : ''}
-<p><span class="status ${esc(p.status)}" id="status" data-payment="${esc(p.id)}">${paid ? 'paid' : esc(p.status)}</span></p></section>
-<div class="card" id="pay-box" ${paid ? 'hidden' : ''}>
+    path: `/deposits/${d.id}`,
+    body: `<section class="payee" style="padding-top:2rem"><p class="muted" style="margin:0">Ad budget</p>
+<p class="amount">${usd(d.amountCents)}</p>
+<p><span class="status ${esc(d.status)}" id="status" data-deposit="${esc(d.id)}">${paid ? 'paid' : esc(d.status)}</span></p></section>
+<div class="card" id="pay-box" ${paid || !d.address ? 'hidden' : ''}>
   <p class="center">Send exactly</p>
-  <p class="amount" style="font-size:1.6rem">${esc(p.amountCrypto)} <span class="muted">${esc(coinName(p.coin))}</span></p>
-  <div class="address"><code>${esc(p.amountCrypto)}</code><button class="copy" type="button" data-copy="${esc(p.amountCrypto)}">Copy amount</button></div>
+  <p class="amount" style="font-size:1.6rem">${esc(d.amountCrypto)} <span class="muted">${esc(coinName(d.coin))}</span></p>
+  <div class="address"><code>${esc(d.amountCrypto)}</code><button class="copy" type="button" data-copy="${esc(d.amountCrypto)}">Copy amount</button></div>
   ${o.qr}
   <p class="center muted small">to this address</p>
-  <div class="address"><code>${esc(p.address)}</code><button class="copy" type="button" data-copy="${esc(p.address)}">Copy</button></div>
-  <p class="muted small center">${p.expiresAt ? `Good until ${esc(new Date(p.expiresAt).toUTCString().replace(' GMT', ' UTC'))}. ` : ''}Send it in one payment, on the right network, from a wallet you control. This page updates by itself.</p>
+  <div class="address"><code>${esc(d.address)}</code><button class="copy" type="button" data-copy="${esc(d.address)}">Copy</button></div>
+  <p class="muted small center">${d.expiresAt ? `Good until ${esc(new Date(d.expiresAt).toUTCString().replace(' GMT', ' UTC'))}. ` : ''}One payment, on the right network. This page updates by itself.</p>
 </div>
-<div class="card center" id="paid-box" ${paid ? '' : 'hidden'}><h2 class="ok">Paid. Thank you.</h2><p class="muted">CoinPay has the payment and forwards it to ${esc(o.payee?.name || p.handle)}.</p></div>
-<p class="center muted small"><a href="/${esc(p.handle)}">Back</a> · Payment ${esc(p.id)}</p>`,
+<div class="card center" id="paid-box" ${paid ? '' : 'hidden'}><h2 class="ok">Budget added.</h2><p class="muted">Your ads are running.</p><a class="btn" href="/advertise">Back to my ads</a></div>
+${!paid && d.status !== 'pending' ? `<p class="note">This deposit ${esc(d.status)}. <a href="/advertise">Start another</a>.</p>` : ''}
+<p class="center muted small"><a href="/advertise">Back</a> · Deposit ${esc(d.id)}</p>`,
   })
 }
 
-export function messagePage(ctx: Ctx, o: { title: string; message: string; status?: number }): string {
-  return layout({ ctx, noindex: true, title: `${o.title} · pay.agent`, description: o.message, path: '/', body: `<section class="hero"><h1>${esc(o.title)}</h1><p class="tag">${esc(o.message)}</p><a class="btn" href="/">Home</a></section>` })
+// ---- publishers -----------------------------------------------------------------
+
+export function publishPage(ctx: Ctx, o: { sites: Site[]; withdrawals: Withdrawal[]; flash?: string; error?: string; values?: Record<string, string> }): string {
+  const v = o.values ?? {}
+  const earned = o.sites.reduce((n, s) => n + s.earnedCents, 0)
+  return layout({
+    ctx,
+    noindex: true,
+    title: 'Publish · ad.network',
+    description: 'Earn from your site: paste one tag, add a wallet, withdraw.',
+    path: '/publish',
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>Publish</h1><p class="tag">${o.sites.length ? `Your sites have earned <b>${usd(earned)}</b>.` : 'Put ads on your site and get paid in USDC.'}</p></section>
+${flashNote(o.flash)}${flashNote(o.error, true)}
+<form method="post" action="/publish" class="card">${csrfField(ctx)}
+  <h2>Add a site</h2>
+  <label for="site">Your site</label>
+  <div class="row"><input id="site" name="site" required placeholder="example.com" value="${esc(v.site ?? '')}" spellcheck="false" autocapitalize="none"><button class="btn">Get my tag</button></div>
+</form>
+<div class="card"><h2>Your sites</h2>${o.sites.length ? `<table><thead><tr><th>Site</th><th>Tag</th><th>Earned</th><th>Can withdraw</th></tr></thead><tbody>${o.sites
+      .map((s) => `<tr><td><a href="/sites/${esc(s.host)}">${esc(s.host)}</a></td><td>${s.verifiedAt ? '<span class="status complete">live</span>' : '<span class="status pending">not seen yet</span>'}</td><td>${usd(s.earnedCents)}</td><td>${usd(s.availableCents)}</td></tr>`)
+      .join('')}</tbody></table>` : '<p class="muted">None yet.</p>'}</div>
+${o.withdrawals.length ? `<div class="card"><h2>Withdrawals</h2><table><thead><tr><th>When</th><th>Amount</th><th>Status</th></tr></thead><tbody>${o.withdrawals.map((w) => `<tr><td>${when(w.createdAt)}</td><td>${usd(w.amountCents)}</td><td>${esc(w.status)}</td></tr>`).join('')}</tbody></table></div>` : ''}`,
+  })
+}
+
+export function sitePage(ctx: Ctx, o: { s: Site; embed: string; suggestions: { coin: string; address: string }[]; flash?: string; error?: string }): string {
+  const s = o.s
+  const canWithdraw = Boolean(s.verifiedAt && s.payoutAddress && s.availableCents >= MIN_PAYOUT_CENTS)
+  return layout({
+    ctx,
+    noindex: true,
+    script: true,
+    title: `${s.host} · ad.network`,
+    description: 'Your site on ad.network.',
+    path: `/sites/${s.host}`,
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>${esc(s.host)}</h1><p class="tag">${s.verifiedAt ? 'Your tag is live.' : 'Paste your tag, publish, and you are in.'}</p></section>
+${flashNote(o.flash)}${flashNote(o.error, true)}
+<div class="card"><h2><span class="step-n">1</span>Your tag</h2><p class="muted small">Paste it where the ad should show, or before <code>&lt;/body&gt;</code>. It is yours: it carries a code only you have.</p>
+<pre class="tag-code">${esc(o.embed)}</pre><p><button class="copy" type="button" data-copy="${esc(o.embed)}">Copy the tag</button></p>
+${s.verifiedAt ? `<p class="ok small">Seen on https://${esc(s.host)}/ ${esc(when(s.verifiedAt))} UTC.</p>` : `<form method="post" action="/sites/${esc(s.host)}/check">${csrfField(ctx)}<button class="btn">Check my site</button></form>`}</div>
+<div class="card"><h2><span class="step-n">2</span>Your wallet</h2><p class="muted small">Where crawlproof sends what you earn, in USDC.</p>
+<form method="post" action="/sites/${esc(s.host)}/wallet">${csrfField(ctx)}
+  <div class="row"><select name="coin" aria-label="Coin">${PAYOUT_COINS.map((c) => `<option value="${c}" ${s.payoutCoin === c ? 'selected' : ''}>${esc(coinName(c))}</option>`).join('')}</select>
+  <input name="address" placeholder="Wallet address" value="${esc(s.payoutAddress || o.suggestions[0]?.address || '')}" spellcheck="false" autocomplete="off"></div>
+  ${!s.payoutAddress && o.suggestions.length ? `<p class="muted small">Filled in from your CoinPay wallet (${esc(coinName(o.suggestions[0]!.coin))}).</p>` : ''}
+  <p><button class="btn">${s.payoutAddress ? 'Change wallet' : 'Save wallet'}</button></p></form></div>
+<div class="card"><h2><span class="step-n">3</span>Get paid</h2>
+<p>Earned <b>${usd(s.earnedCents)}</b> · can withdraw <b>${usd(s.availableCents)}</b></p>
+<form method="post" action="/sites/${esc(s.host)}/withdraw">${csrfField(ctx)}<button class="btn" ${canWithdraw ? '' : 'disabled'}>Withdraw ${usd(s.availableCents)}</button></form>
+<p class="muted small">${!s.verifiedAt ? 'Withdrawals start once your tag is seen. ' : ''}${!s.payoutAddress ? 'Add a wallet first. ' : ''}Minimum ${usd(MIN_PAYOUT_CENTS)}. Numbers from ${esc(when(s.syncedAt || s.createdAt))} UTC.</p></div>
+<details class="card"><summary>Remove this site</summary><form method="post" action="/sites/${esc(s.host)}/delete">${csrfField(ctx)}<button class="copy bad">Stop ads on ${esc(s.host)}</button></form><p class="muted small">Withdraw first: earnings stay with the site.</p></details>
+<p class="center"><a href="/publish">All my sites</a></p>`,
+  })
+}
+
+export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?: string; flash?: string }): string {
+  const u = o.user
+  return layout({
+    ctx,
+    noindex: true,
+    script: true,
+    title: 'Me · ad.network',
+    description: 'Your ad.network account.',
+    path: '/me',
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>Hi${u.name ? `, ${esc(u.name.split(' ')[0])}` : ''}.</h1><p class="tag">Signed in with CoinPay as ${esc(u.email || u.name)}.</p></section>
+${flashNote(o.flash)}
+<div class="grid2"><a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Balance ${usd(Math.max(0, o.balanceCents))}</p></a><a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Your sites and earnings</p></a></div>
+<div class="card"><h2>API key</h2>${o.apiKey ? `<p>Your key, shown once:</p><div class="address"><code>${esc(o.apiKey)}</code><button class="copy" type="button" data-copy="${esc(o.apiKey)}">Copy</button></div><p class="muted small">export ADNETWORK_KEY=${esc(o.apiKey)}</p>` : `<p class="muted small">For the API, the CLI and MCP. ${u.apiKeyHash ? 'You have one; making a new one replaces it.' : ''}</p>`}
+<form method="post" action="/me/key">${csrfField(ctx)}<button class="copy">${u.apiKeyHash ? 'Replace my key' : 'Make a key'}</button></form></div>
+<details class="card"><summary>Delete my account</summary><form method="post" action="/me/delete">${csrfField(ctx)}<button class="copy bad">Stop my ads and sites and delete everything ad.network keeps</button></form><p class="muted small">Withdraw your earnings first. Unspent ad budget is not refunded automatically: ask on <a href="${REPO}/issues">GitHub</a>.</p></details>`,
+  })
+}
+
+export function messagePage(ctx: Ctx, o: { title: string; message: string }): string {
+  return layout({ ctx, noindex: true, title: `${o.title} · ad.network`, description: o.message, path: '/', body: `<section class="hero"><h1>${esc(o.title)}</h1><p class="tag">${esc(o.message)}</p><a class="btn" href="/">Home</a></section>` })
+}
+
+export function installScript(): string {
+  return `#!/bin/sh
+# ad.network CLI installer: curl -fsSL ${SITE}/install.sh | sh
+set -e
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Installing bun (https://bun.sh) first..."
+  curl -fsSL https://bun.sh/install | bash
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+bun add -g @profullstack/adnetwork
+echo
+echo "Installed: adnetwork. Make a key at ${SITE}/me, then:"
+echo "  export ADNETWORK_KEY=an_..."
+echo "  adnetwork"
+`
 }
