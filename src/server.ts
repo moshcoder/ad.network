@@ -12,6 +12,7 @@ import { authorizeUrl, exchangeCode, pkce } from '@profullstack/coinpay-onboard/
 import { CoinPay } from '@profullstack/coinpay-onboard'
 import { Sealer, Store, type Campaign, type DepositRow, type Site, type User } from './db.js'
 import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, publishPage, sitePage, SITE, type Ctx } from './html.js'
+import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
 import { ringDescriptor, startRingFooterRefresh } from './ring-footer.js'
 import { AdNetwork, newApiKey, UserError, type Config } from './service.js'
@@ -518,6 +519,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'
   startRingRefresh()
+  startPitFooterRefresh('ad.network')
   startRingFooterRefresh()
   net.startSweep()
   return Bun.serve({

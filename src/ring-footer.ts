@@ -20,7 +20,6 @@ const OPTIONS: FooterOptions = {
     { label: 'Help', href: '/help' },
     { label: 'API, CLI, MCP', href: '/help#agents' },
     { label: 'Source', href: 'https://github.com/moshcoder/ad.network' },
-    { label: 'Moshpit ring', href: 'https://pit.world/ring' },
     { label: 'Ads by crawlproof', href: 'https://crawlproof.com' },
     { label: 'Payments by CoinPay', href: 'https://coinpayportal.com' },
   ],
