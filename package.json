@@ -5,19 +5,36 @@
   "license": "MIT",
   "type": "module",
   "homepage": "https://ad.network.pit.world",
-  "repository": { "type": "git", "url": "git+https://github.com/moshcoder/ad.network.git" },
-  "bin": { "adnetwork": "bin/adnetwork" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moshcoder/ad.network.git"
+  },
+  "bin": {
+    "adnetwork": "bin/adnetwork"
+  },
   "files": ["bin/adnetwork", "src", "public", "README.md", "LICENSE"],
-  "engines": { "bun": ">=1.1" },
+  "engines": {
+    "bun": ">=1.1"
+  },
   "keywords": ["ads", "advertising", "ad network", "publishers", "crypto", "usdc", "mcp", "agents", "crawlproof", "coinpay"],
-  "scripts": { "start": "bun src/server.ts", "dev": "bun --watch src/server.ts", "test": "bun test", "typecheck": "tsc --noEmit" },
+  "scripts": {
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@profullstack/coinpay-onboard": "^0.1.1",
+    "@profullstack/footer": "^0.2.4",
     "@profullstack/hqtui": "^0.10.3",
     "hono": "^4.8.0",
     "qrcode": "^1.5.4",
     "zod": "^3.25.0"
   },
-  "devDependencies": { "@types/bun": "^1.2.0", "@types/qrcode": "^1.5.5", "typescript": "^5.9.0" }
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.9.0"
+  }
 }
