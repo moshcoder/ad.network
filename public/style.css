@@ -93,7 +93,8 @@ details summary { cursor: pointer; font-weight: 600; }
 .ring-bar .ring-home { color: var(--accent); font-weight: 700; }
 .ring-bar .ring-sites { display: inline-flex; gap: 12px; padding: 0 12px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 .ring-bar [aria-current='page'] { color: var(--text); }
-@media (max-width: 640px) { .ring-bar .ring-sites, .ring-bar .ring-home span { display: none; } }
+.ring-bar .ring-start { margin-left: auto; color: var(--accent); font-weight: 700; }
+@media (max-width: 640px) { .ring-bar .ring-home span { display: none; } }
 /* ad.network */
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin: 1rem 0; }
 .card.pick { display: block; color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }

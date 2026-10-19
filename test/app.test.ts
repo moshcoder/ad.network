@@ -127,6 +127,7 @@ describe('ad.network', () => {
     expect(html).toContain('Ads, the simple way.')
     expect(html).toContain('href="/advertise"')
     expect(html).toContain('ring-bar')
+    expect(html).toContain('<a class="ring-start" href="https://pit.world/start">Start building here…</a>')
     expect((await t.req('/help')).status).toBe(200)
     const sh = await t.req('/install.sh')
     expect(sh.headers.get('content-type')).toContain('shellscript')
