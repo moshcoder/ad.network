@@ -41,7 +41,7 @@ function fakes() {
       const existing = [...s.campaigns.values()].find((c) => norm(c.destination_url) === norm(body.url))
       if (existing) return json(200, { ...existing, existing: true })
       const id = `c${++n}`
-      const c = { id, ref_slug: `crawlproof-ad-${n}`, name: 'Example', status: body.status, destination_url: body.url, daily_budget_cents: body.daily_budget_cents, bid_credits: 4, created_at: '2026-10-19', creatives: 6, stats: { impressions: 0, clicks: 0, spent_cents: 0, spend_today_cents: 0, free_impressions: 0, free_clicks: 0 } }
+      const c = { id, ref_slug: `crawlproof-ad-${n}`, name: 'Example', status: body.status, destination_url: body.url.split('?')[0], daily_budget_cents: body.daily_budget_cents, bid_credits: 4, created_at: '2026-10-19', creatives: 6, stats: { impressions: 0, clicks: 0, spent_cents: 0, spend_today_cents: 0, free_impressions: 0, free_clicks: 0 } }
       s.campaigns.set(id, c)
       return json(201, c)
     }
