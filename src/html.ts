@@ -34,7 +34,7 @@ const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle c
 
 export type Ctx = { user: User | null; csrf: string }
 
-type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; script?: boolean }
+type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; script?: boolean; head?: string }
 
 function layout(o: LayoutOptions): string {
   const signedIn = Boolean(o.ctx.user)
@@ -55,6 +55,7 @@ ${o.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" 
 <meta property="og:description" content="${esc(o.description)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="${STYLE_URL}">
+${o.head ?? ''}
 ${o.script ? `<script src="${SCRIPT_URL}" defer></script>` : ''}
 ${TRACKER}
 </head>
@@ -78,6 +79,11 @@ ${pitFooter()}
 </html>`
 }
 
+/** Our own ad.network publisher unit on the home page (served by crawlproof as a framed ad; the CSP allows the frame). */
+const AD_CLAIM = 'lUfznNYA2hxmzcKK'
+const AD_SLOT = '86949642-f97d-4912-90ac-99fdb20d8878'
+const HOME_AD = `<aside class="ad-unit ad-banner_300x250" data-ad-network="${AD_CLAIM}" data-cp-ad data-slot="${AD_SLOT}" data-format="banner_300x250" aria-label="Advertisement"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${AD_SLOT}&amp;format=banner_300x250" width="300" height="250" loading="lazy" style="border:0" title="Advertisement"></iframe></aside>`
+
 const csrfField = (ctx: Ctx) => `<input type="hidden" name="csrf" value="${esc(ctx.csrf)}">`
 const flashNote = (flash?: string, error = false) => (flash ? `<p class="note${error ? ' error' : ''}">${esc(flash)}</p>` : '')
 
@@ -87,6 +93,7 @@ export function homePage(ctx: Ctx): string {
     title: 'ad.network: run ads or earn from your site, in crypto',
     description: 'The simple ad network. Advertisers paste a link and a daily budget. Publishers paste one tag and get paid to their wallet. Crypto in, crypto out.',
     path: '/',
+    head: `<meta name="ad.network" content="${AD_CLAIM}">`,
     body: `<section class="hero">
   <h1>Ads, the simple way.</h1>
   <p class="tag">Paste a link and a daily budget, and your ad runs across the network. Or paste one tag into your site and get paid to your wallet. Crypto in, crypto out, no forms.</p>
@@ -95,6 +102,7 @@ export function homePage(ctx: Ctx): string {
   <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.</p><span class="btn">Run an ad</span></a>
   <a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Name your site, paste one tag before <code>&lt;/body&gt;</code>, add a wallet. Withdraw what you earn whenever it passes ${usd(MIN_PAYOUT_CENTS)}.</p><span class="btn">Earn from my site</span></a>
 </div>
+${HOME_AD}
 <div class="grid3">
   <div class="card"><h2><span class="step-n">1</span>Sign in</h2><p class="muted">With your CoinPay account (free; you can make one on the way).</p></div>
   <div class="card"><h2><span class="step-n">2</span>One field</h2><p class="muted">A link to advertise, or a site to earn from. That is the whole setup.</p></div>
