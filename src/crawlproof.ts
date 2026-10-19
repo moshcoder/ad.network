@@ -19,7 +19,8 @@ export type CampaignSummary = {
   daily_budget_cents: number
   bid_credits: number
   created_at: string
-  creatives?: Creative[]
+  /** crawlproof answers how many creatives it wrote; older answers carried the creatives themselves. */
+  creatives?: number | Creative[]
   existing?: boolean
 }
 

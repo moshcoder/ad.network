@@ -214,14 +214,16 @@ export class AdNetwork {
     } catch (e) {
       throw new UserError(e instanceof CrawlproofError && e.status < 500 ? e.message : 'The ad service did not answer. Try again in a minute.', 'url', 502)
     }
-    // crawlproof answers an existing live campaign for the same page instead of
-    // making a second one; that one may already be someone else's.
+    // crawlproof answers an existing live campaign for the same page (query
+    // string ignored) instead of making a second one. If it is someone else's
+    // that is a refusal; one nobody here owns is ours to adopt (a create whose
+    // answer never reached us).
     const mine = this.store.campaign(c.id)
     if (mine) {
-      if (mine.sub !== user.sub) throw new UserError('Someone already runs an ad for that exact page. Link a different page (add ?ref=you).', 'url', 409)
+      if (mine.sub !== user.sub) throw new UserError('Someone already runs an ad for that page. Link a different page of yours (the part after ? does not count).', 'url', 409)
       return mine
     }
-    const creative = c.creatives?.find((k) => k.headline) ?? c.creatives?.[0]
+    const creative = Array.isArray(c.creatives) ? (c.creatives.find((k) => k.headline) ?? c.creatives[0]) : undefined
     const row = this.store.addCampaign({ id: c.id, ref: c.ref_slug, sub: user.sub, url, name: c.name, dailyBudgetCents: daily, status: c.status, headline: creative?.headline ?? '', body: creative?.body ?? '' })
     await this.enforce(user.sub).catch(() => {})
     return this.store.campaign(row.id)!

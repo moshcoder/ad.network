@@ -37,10 +37,11 @@ function fakes() {
     s.calls.push(`${method} ${path}`)
     s.tokenOf.push(`${path} ${auth}`)
     if (path === '/api/ads/v1/campaigns' && method === 'POST') {
-      const existing = [...s.campaigns.values()].find((c) => c.destination_url === body.url)
+      const norm = (u: string) => u.split('?')[0]
+      const existing = [...s.campaigns.values()].find((c) => norm(c.destination_url) === norm(body.url))
       if (existing) return json(200, { ...existing, existing: true })
       const id = `c${++n}`
-      const c = { id, ref_slug: `crawlproof-ad-${n}`, name: 'Example', status: body.status, destination_url: body.url, daily_budget_cents: body.daily_budget_cents, bid_credits: 4, created_at: '2026-10-19', creatives: [{ format: 'banner_300x250', headline: 'Try Example', body: 'It is good.' }], stats: { impressions: 0, clicks: 0, spent_cents: 0, spend_today_cents: 0, free_impressions: 0, free_clicks: 0 } }
+      const c = { id, ref_slug: `crawlproof-ad-${n}`, name: 'Example', status: body.status, destination_url: body.url, daily_budget_cents: body.daily_budget_cents, bid_credits: 4, created_at: '2026-10-19', creatives: 6, stats: { impressions: 0, clicks: 0, spent_cents: 0, spend_today_cents: 0, free_impressions: 0, free_clicks: 0 } }
       s.campaigns.set(id, c)
       return json(201, c)
     }
@@ -196,14 +197,25 @@ describe('ad.network', () => {
     await t.signIn('u-alice')
     await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'https://example.com/', daily: '5' } })
     await t.signIn('u-bob')
-    const res = await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'https://example.com/', daily: '5' } })
+    const res = await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'https://example.com/?ref=bob', daily: '5' } })
     expect(res.status).toBe(409)
-    expect(await res.text()).toContain('Someone already runs an ad for that exact page')
+    expect(await res.text()).toContain('Someone already runs an ad for that page')
     expect((await t.req('/ads/crawlproof-ad-1')).status).toBe(404)
     // Out-of-range budgets never reach crawlproof.
     const calls = t.f.s.calls.length
     expect((await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'https://bob.example.org/', daily: '0.5' } })).status).toBe(400)
     expect(t.f.s.calls.length).toBe(calls)
+  })
+
+  test('a campaign crawlproof made but whose answer never reached us is adopted, not doubled', async () => {
+    const t = setup()
+    await t.signIn()
+    // crawlproof has it (the create went through) but ad.network never recorded it.
+    t.f.s.campaigns.set('orphan', { id: 'orphan', ref_slug: 'crawlproof-ad-77', name: 'Lost', status: 'draft', destination_url: 'https://lost.example.net/', daily_budget_cents: 500, bid_credits: 4, created_at: '2026-10-19', creatives: 6, stats: { impressions: 0, clicks: 0, spent_cents: 0, spend_today_cents: 0, free_impressions: 0, free_clicks: 0 } })
+    const res = await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'lost.example.net', daily: '5' } })
+    expect(res.headers.get('location')).toBe('/ads/crawlproof-ad-77?made=1')
+    expect(t.store.campaigns('u-alice').map((c) => c.ref)).toEqual(['crawlproof-ad-77'])
+    expect(t.f.s.campaigns.size).toBe(1)
   })
 
   test('publisher: a tag with your own code, live once seen, paid to your wallet', async () => {
