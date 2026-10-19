@@ -511,6 +511,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       crawlproofBase: env.CRAWLPROOF_URL ?? 'https://crawlproof.com',
       advertiserToken: env.ADNETWORK_ADVERTISER_TOKEN!,
       publisherToken: env.ADNETWORK_PUBLISHER_TOKEN!,
+      houseSubs: (env.ADNETWORK_HOUSE_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     },
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'

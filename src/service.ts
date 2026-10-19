@@ -33,6 +33,8 @@ export type Config = {
   publisherToken: string
   /** Signs claim codes. */
   key: string
+  /** Accounts that run the operator's own properties: no per-person caps on ads or sites. */
+  houseSubs?: string[]
   fetch?: typeof fetch
   /** Fetches a publisher's page to look for their tag; tests swap it. */
   fetchPage?: (url: string) => Promise<string>
@@ -157,6 +159,10 @@ export class AdNetwork {
     this.pubs = new Crawlproof(config.crawlproofBase, config.publisherToken, config.fetch)
   }
 
+  private house(sub: string): boolean {
+    return this.config.houseSubs?.includes(sub) ?? false
+  }
+
   // ---- CoinPay, as the person (only to suggest their own payout wallet) ----
 
   clientFor(sub: string): Promise<CoinPay> {
@@ -206,7 +212,7 @@ export class AdNetwork {
     const url = cleanUrl(input.url)
     const daily = Math.round(Number(input.dailyBudgetUsd) * 100)
     if (!Number.isFinite(daily) || daily < MIN_DAILY_USD * 100 || daily > MAX_DAILY_USD * 100) throw new UserError(`A daily budget is $${MIN_DAILY_USD} to $${MAX_DAILY_USD}.`, 'budget')
-    if (this.store.campaigns(user.sub).length >= 50) throw new UserError('You have 50 ads already. Delete one first.')
+    if (!this.house(user.sub) && this.store.campaigns(user.sub).length >= 50) throw new UserError('You have 50 ads already. Delete one first.')
     const funded = this.balanceCents(user.sub) > 0
     let c
     try {
@@ -351,7 +357,7 @@ export class AdNetwork {
       }
       return this.store.claimSite({ slotId: existing.slotId, sub: user.sub, host, embed: existing.embed })
     }
-    if (this.store.sites(user.sub).length >= 25) throw new UserError('You have 25 sites already.')
+    if (!this.house(user.sub) && this.store.sites(user.sub).length >= 25) throw new UserError('You have 25 sites already.')
     let slot
     try {
       slot = await this.pubs.createSlot(host)

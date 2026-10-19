@@ -91,7 +91,7 @@ function setup() {
     store,
     secureCookies: false,
     origin: 'https://ad.network.pit.world',
-    config: { key: KEY, coinpayBase: 'https://cp.test', clientId: 'cp_client', crawlproofBase: 'https://crawlproof.test', advertiserToken: 'crp_ADS', publisherToken: 'crp_PUBS', fetch: f.fetchImpl, fetchPage: async (url) => pages.get(new URL(url).hostname) ?? '' },
+    config: { key: KEY, coinpayBase: 'https://cp.test', clientId: 'cp_client', crawlproofBase: 'https://crawlproof.test', advertiserToken: 'crp_ADS', publisherToken: 'crp_PUBS', houseSubs: ['u-house'], fetch: f.fetchImpl, fetchPage: async (url) => pages.get(new URL(url).hostname) ?? '' },
   })
   let cookie = ''
   const req = async (path: string, init: RequestInit & { form?: Record<string, string> } = {}) => {
@@ -304,6 +304,19 @@ describe('ad.network', () => {
     expect(onKey(s, { name: 'w', key: 'w', char: 'w' })).toBe('withdraw')
     expect(onKey(s, { name: 'q', key: 'q', char: 'q' })).toBe('quit')
     expect(flag(['run', 'x', '--daily=9'], 'daily')).toBe('9')
+  })
+
+  test('house accounts run every property: no cap on sites', async () => {
+    const t = setup()
+    const tokens = { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 3600_000 }
+    const alice = t.store.upsertUser('u-alice', 'Alice', 'a@x.test', tokens)
+    const house = t.store.upsertUser('u-house', 'House', 'h@x.test', tokens)
+    for (let i = 0; i < 25; i++) {
+      await t.net.addSite(alice, `a${i}.example.org`)
+      await t.net.addSite(house, `h${i}.example.org`)
+    }
+    await expect(t.net.addSite(alice, 'a25.example.org')).rejects.toThrow('25 sites')
+    expect((await t.net.addSite(house, 'h25.example.org')).host).toBe('h25.example.org')
   })
 
   test('input cleaning keeps the server off private networks', () => {
