@@ -130,6 +130,7 @@ describe('ad.network', () => {
     const sh = await t.req('/install.sh')
     expect(sh.headers.get('content-type')).toContain('shellscript')
     expect(await sh.text()).toContain('bun add -g @profullstack/adnetwork')
+    for (const p of ['/llms.txt', '/robots.txt']) expect((await t.req(p)).headers.get('content-type')).toBe('text/plain; charset=utf-8')
     const gated = await t.req('/advertise')
     expect(gated.status).toBe(302)
     expect(gated.headers.get('location')).toBe('/auth/start?next=/advertise')

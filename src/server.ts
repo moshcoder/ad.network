@@ -98,12 +98,14 @@ export function createApp(deps: Deps) {
     return c.body(await file.arrayBuffer(), 200, { 'content-type': TYPES[name.split('.').pop()!]!, 'cache-control': 'public, max-age=86400' })
   })
   app.get('/install.sh', (c) => c.body(installScript(), 200, { 'content-type': 'text/x-shellscript; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
-  app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /api/\nDisallow: /auth/\nSitemap: ' + ORIGIN + '/sitemap.xml\n'))
+  // c.text() loses its content-type once the header middleware touches the response; say it outright.
+  const plain = (c: Context, text: string) => c.body(text, 200, { 'content-type': 'text/plain; charset=utf-8' })
+  app.get('/robots.txt', (c) => plain(c, 'User-agent: *\nDisallow: /api/\nDisallow: /auth/\nSitemap: ' + ORIGIN + '/sitemap.xml\n'))
   app.get('/sitemap.xml', (c) =>
     c.body(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/help'].map((p) => `<url><loc>${ORIGIN}${p}</loc></url>`).join('')}</urlset>`, 200, { 'content-type': 'application/xml' }),
   )
   app.get('/llms.txt', (c) =>
-    c.text(`# ad.network\n\n> Run ads, or earn from your site, in crypto. Sign in with CoinPay. Ads by crawlproof.\n\n- Help and API: ${ORIGIN}/help\n- CLI: bunx @profullstack/adnetwork\n- MCP: claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp\n`),
+    plain(c, `# ad.network\n\n> Run ads, or earn from your site, in crypto. Sign in with CoinPay. Ads by crawlproof.\n\n- Help and API: ${ORIGIN}/help\n- CLI: bunx @profullstack/adnetwork\n- MCP: claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp\n`),
   )
 
   app.get('/', (c) => page(c, homePage(ctxOf(c))))
