@@ -79,10 +79,8 @@ ${pitFooter()}
 </html>`
 }
 
-/** Our own ad.network publisher unit on the home page (served by crawlproof as a framed ad; the CSP allows the frame). */
+/** Our own ad.network publisher claim (the head meta). The home page carries no ad unit. */
 const AD_CLAIM = 'lUfznNYA2hxmzcKK'
-const AD_SLOT = '86949642-f97d-4912-90ac-99fdb20d8878'
-const HOME_AD = `<aside class="ad-unit ad-banner_300x250" data-ad-network="${AD_CLAIM}" data-cp-ad data-slot="${AD_SLOT}" data-format="banner_300x250" aria-label="Advertisement"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${AD_SLOT}&amp;format=banner_300x250" width="300" height="250" loading="lazy" style="border:0" title="Advertisement"></iframe></aside>`
 
 const csrfField = (ctx: Ctx) => `<input type="hidden" name="csrf" value="${esc(ctx.csrf)}">`
 const flashNote = (flash?: string, error = false) => (flash ? `<p class="note${error ? ' error' : ''}">${esc(flash)}</p>` : '')
@@ -102,7 +100,6 @@ export function homePage(ctx: Ctx): string {
   <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.</p><span class="btn">Run an ad</span></a>
   <a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Name your site, paste one tag before <code>&lt;/body&gt;</code>, add a wallet. Withdraw what you earn whenever it passes ${usd(MIN_PAYOUT_CENTS)}.</p><span class="btn">Earn from my site</span></a>
 </div>
-${HOME_AD}
 <div class="grid3">
   <div class="card"><h2><span class="step-n">1</span>Sign in</h2><p class="muted">With your CoinPay account (free; you can make one on the way).</p></div>
   <div class="card"><h2><span class="step-n">2</span>One field</h2><p class="muted">A link to advertise, or a site to earn from. That is the whole setup.</p></div>
