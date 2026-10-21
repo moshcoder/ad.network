@@ -35,6 +35,12 @@ export type Config = {
   key: string
   /** Accounts that run the operator's own properties: no per-person caps on ads or sites. */
   houseSubs?: string[]
+  /**
+   * Launch offer: ads run with no balance. Free clicks are paper on crawlproof
+   * (nothing is debited, publishers are paid only from real advertiser cash),
+   * so this costs nobody anything. Deposits still work and still count.
+   */
+  freeAds?: boolean
   fetch?: typeof fetch
   /** Fetches a publisher's page to look for their tag; tests swap it. */
   fetchPage?: (url: string) => Promise<string>
@@ -207,13 +213,18 @@ export class AdNetwork {
     return this.store.balanceCents(sub)
   }
 
+  /** True when this person's ads may run: always during the free launch, otherwise while they have budget. */
+  canRun(sub: string): boolean {
+    return Boolean(this.config.freeAds) || this.balanceCents(sub) > 0
+  }
+
   /** A new ad for `url`. It starts running as soon as its owner has budget. */
   async runAd(user: User, input: { url: string; dailyBudgetUsd: number; name?: string }): Promise<Campaign> {
     const url = cleanUrl(input.url)
     const daily = Math.round(Number(input.dailyBudgetUsd) * 100)
     if (!Number.isFinite(daily) || daily < MIN_DAILY_USD * 100 || daily > MAX_DAILY_USD * 100) throw new UserError(`A daily budget is $${MIN_DAILY_USD} to $${MAX_DAILY_USD}.`, 'budget')
     if (!this.house(user.sub) && this.store.campaigns(user.sub).length >= 50) throw new UserError('You have 50 ads already. Delete one first.')
-    const funded = this.balanceCents(user.sub) > 0
+    const funded = this.canRun(user.sub)
     let c
     try {
       c = await this.ads.createCampaign({ url, ...(input.name?.trim() ? { name: input.name.trim().slice(0, 80) } : {}), daily_budget_cents: daily, status: funded ? 'active' : 'draft' })
@@ -282,10 +293,10 @@ export class AdNetwork {
 
   /**
    * Runs what should run and pauses what should not: an ad runs when its owner
-   * wants it to and their balance is above zero.
+   * wants it to and they can run (free launch, or a balance above zero).
    */
   async enforce(sub: string): Promise<void> {
-    const funded = this.balanceCents(sub) > 0
+    const funded = this.canRun(sub)
     for (const c of this.store.campaigns(sub)) {
       const target = c.wanted === 'active' && funded ? 'active' : 'paused'
       const current = c.status === 'active' ? 'active' : 'paused'

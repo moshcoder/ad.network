@@ -83,7 +83,7 @@ function fakes() {
   return { s, fetchImpl }
 }
 
-function setup() {
+function setup(extra: { freeAds?: boolean } = {}) {
   const f = fakes()
   const pages = new Map<string, string>()
   const store = new Store(':memory:', new Sealer(KEY))
@@ -91,7 +91,7 @@ function setup() {
     store,
     secureCookies: false,
     origin: 'https://ad.network.pit.world',
-    config: { key: KEY, coinpayBase: 'https://cp.test', clientId: 'cp_client', crawlproofBase: 'https://crawlproof.test', advertiserToken: 'crp_ADS', publisherToken: 'crp_PUBS', houseSubs: ['u-house'], fetch: f.fetchImpl, fetchPage: async (url) => pages.get(new URL(url).hostname) ?? '' },
+    config: { key: KEY, coinpayBase: 'https://cp.test', clientId: 'cp_client', crawlproofBase: 'https://crawlproof.test', advertiserToken: 'crp_ADS', publisherToken: 'crp_PUBS', houseSubs: ['u-house'], ...extra, fetch: f.fetchImpl, fetchPage: async (url) => pages.get(new URL(url).hostname) ?? '' },
   })
   let cookie = ''
   const req = async (path: string, init: RequestInit & { form?: Record<string, string> } = {}) => {
@@ -133,9 +133,10 @@ describe('ad.network', () => {
     expect(sh.headers.get('content-type')).toContain('shellscript')
     expect(await sh.text()).toContain('bun add -g @profullstack/adnetwork')
     for (const p of ['/llms.txt', '/robots.txt']) expect((await t.req(p)).headers.get('content-type')).toBe('text/plain; charset=utf-8')
-    const gated = await t.req('/advertise')
+    // /advertise pitches the offer to a signed-out visitor; account pages still redirect.
+    expect(await (await t.req('/advertise')).text()).toContain('/auth/start?next=/advertise')
+    const gated = await t.req('/me')
     expect(gated.status).toBe(302)
-    expect(gated.headers.get('location')).toBe('/auth/start?next=/advertise')
     expect((await t.req('/api/v1/me')).status).toBe(401)
   })
 
@@ -149,6 +150,35 @@ describe('ad.network', () => {
     expect(cb.headers.get('location')).toBe('/publish')
     // A state is single-use.
     expect((await t.req(`/auth/callback?code=c1&state=${encodeURIComponent(loc.searchParams.get('state')!)}`)).status).toBe(400)
+  })
+
+  test('free launch: an ad runs with no balance, and the pages say it is free', async () => {
+    const t = setup({ freeAds: true })
+    expect(await (await t.req('/')).text()).toContain('Free while we launch')
+    await t.signIn()
+    expect(await (await t.req('/advertise')).text()).toContain('Your ads run with no balance.')
+    const made = await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'example.com/free', daily: '5' } })
+    expect(made.status).toBe(302)
+    expect(t.f.s.campaigns.get('c1')).toMatchObject({ status: 'active' })
+    expect(t.net.balanceCents('u-alice')).toBe(0)
+    // The sweep leaves it running.
+    await t.net.sweep()
+    expect(t.f.s.campaigns.get('c1')).toMatchObject({ status: 'active' })
+  })
+
+  test('signed out: /advertise and /publish pitch the offer and link to sign-in', async () => {
+    const t = setup({ freeAds: true })
+    const a = await t.req('/advertise')
+    expect(a.status).toBe(200)
+    const html = await a.text()
+    expect(html).toContain('Advertise free while we launch')
+    expect(html).toContain('/auth/start?next=/advertise')
+    expect(await (await t.req('/publish')).text()).toContain('/auth/start?next=/publish')
+  })
+
+  test('paid mode: the home page does not offer free ads', async () => {
+    const t = setup()
+    expect(await (await t.req('/')).text()).not.toContain('Free while we launch')
   })
 
   test('advertiser: an ad waits for budget, runs once paid, and pauses when spent', async () => {

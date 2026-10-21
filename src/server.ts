@@ -11,7 +11,7 @@ import QRCode from 'qrcode'
 import { authorizeUrl, exchangeCode, pkce } from '@profullstack/coinpay-onboard/oauth'
 import { CoinPay } from '@profullstack/coinpay-onboard'
 import { Sealer, Store, type Campaign, type DepositRow, type Site, type User } from './db.js'
-import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, publishPage, sitePage, SITE, type Ctx } from './html.js'
+import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, pitchPage, publishPage, sitePage, SITE, type Ctx } from './html.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
 import { ringDescriptor, startRingFooterRefresh } from './ring-footer.js'
@@ -75,7 +75,7 @@ export function createApp(deps: Deps) {
   const sessionId = (c: Context) => getCookie(c, SESSION)
   const csrfFor = (sid: string | undefined) => (sid ? createHmac('sha256', config.key).update(`csrf:${sid}`).digest('hex').slice(0, 32) : '')
   const userOf = (c: Context) => store.session(sessionId(c))
-  const ctxOf = (c: Context): Ctx => ({ user: userOf(c), csrf: csrfFor(sessionId(c)) })
+  const ctxOf = (c: Context): Ctx => ({ user: userOf(c), csrf: csrfFor(sessionId(c)), free: Boolean(config.freeAds) })
   const csrfOk = (c: Context, given: unknown) => {
     const expected = csrfFor(sessionId(c))
     const g = Buffer.from(String(given ?? ''))
@@ -165,8 +165,8 @@ export function createApp(deps: Deps) {
     page(c, advertisePage(ctxOf(c), { balanceCents: net.balanceCents(user.sub), campaigns: store.campaigns(user.sub), deposits: store.deposits(user.sub), ...extra }), status)
 
   app.get('/advertise', (c) => {
-    const user = need(c)
-    return user instanceof Response ? user : advertise(c, user)
+    const user = userOf(c)
+    return user ? advertise(c, user) : page(c, pitchPage(ctxOf(c), 'advertise'))
   })
 
   app.post('/advertise', async (c) => {
@@ -208,7 +208,7 @@ export function createApp(deps: Deps) {
     let ad = ownAd(user, c.req.param('ref'))
     if (!ad) return page(c, messagePage(ctxOf(c), { title: 'No such ad', message: 'That ad is not yours, or it is gone.' }), 404)
     if (Date.now() - ad.syncedAt > 60_000) ad = await net.refreshCampaign(ad).catch(() => ad!)
-    const made = c.req.query('made') ? (net.balanceCents(user.sub) > 0 ? 'Your ad is running.' : 'Your ad is ready. Add budget and it starts.') : undefined
+    const made = c.req.query('made') ? (net.canRun(user.sub) ? 'Your ad is running.' : 'Your ad is ready. Add budget and it starts.') : undefined
     return page(c, adPage(ctxOf(c), { c: ad!, ...(made ? { flash: made } : {}) }))
   })
 
@@ -266,8 +266,8 @@ export function createApp(deps: Deps) {
     page(c, publishPage(ctxOf(c), { sites: store.sites(user.sub), withdrawals: store.withdrawals(user.sub), ...extra }), status)
 
   app.get('/publish', (c) => {
-    const user = need(c)
-    return user instanceof Response ? user : publish(c, user)
+    const user = userOf(c)
+    return user ? publish(c, user) : page(c, pitchPage(ctxOf(c), 'publish'))
   })
 
   app.post('/publish', async (c) => {
@@ -515,6 +515,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       advertiserToken: env.ADNETWORK_ADVERTISER_TOKEN!,
       publisherToken: env.ADNETWORK_PUBLISHER_TOKEN!,
       houseSubs: (env.ADNETWORK_HOUSE_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+      freeAds: (env.ADNETWORK_FREE_ADS ?? '1') !== '0',
     },
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'
