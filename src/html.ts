@@ -32,7 +32,7 @@ const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T'
 
 const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.4" fill="currentColor"/><path d="M10.3 21.7a8 8 0 0 1 0-11.4M21.7 10.3a8 8 0 0 1 0 11.4M6.1 25.9a14 14 0 0 1 0-19.8M25.9 6.1a14 14 0 0 1 0 19.8" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>`
 
-export type Ctx = { user: User | null; csrf: string }
+export type Ctx = { user: User | null; csrf: string; /** Free launch: ads run with no balance. */ free?: boolean }
 
 type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; script?: boolean; head?: string }
 
@@ -95,10 +95,11 @@ export function homePage(ctx: Ctx): string {
     body: `<section class="hero">
   <h1>Ads, the simple way.</h1>
   <p class="tag">Paste a link and a daily budget, and your ad runs across the network. Or paste one tag into your site and get paid to your wallet. Crypto in, crypto out, no forms.</p>
+  ${ctx.free ? `<p class="tag"><b>Free while we launch:</b> advertising costs nothing right now. No deposit, no card. Paste a link and your ad runs today.</p>` : ''}
 </section>
 <div class="grid2">
-  <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.</p><span class="btn">Run an ad</span></a>
-  <a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Name your site, paste one tag before <code>&lt;/body&gt;</code>, add a wallet. Withdraw what you earn whenever it passes ${usd(MIN_PAYOUT_CENTS)}.</p><span class="btn">Earn from my site</span></a>
+  <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">${ctx.free ? 'Paste the page people should land on. We write the ad from it and it runs across the network, free during the launch.' : 'Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.'}</p><span class="btn">${ctx.free ? 'Run a free ad' : 'Run an ad'}</span></a>
+  <a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Name your site, paste one tag before <code>&lt;/body&gt;</code>, add a wallet. Withdraw what you earn whenever it passes ${usd(MIN_PAYOUT_CENTS)}.${ctx.free ? ' And advertise your own site across the network for free.' : ''}</p><span class="btn">Earn from my site</span></a>
 </div>
 <div class="grid3">
   <div class="card"><h2><span class="step-n">1</span>Sign in</h2><p class="muted">With your CoinPay account (free; you can make one on the way).</p></div>
@@ -126,7 +127,7 @@ export function helpPage(ctx: Ctx): string {
 <div class="card"><h2>What is it?</h2><p>ad.network is the simple front door to the <a href="${CRAWLPROOF}/ads">crawlproof</a> ad network. crawlproof writes the ads, runs the auction, serves them across its sites and counts honestly (bots and repeat clicks are not charged). <a href="${COINPAY}">CoinPay</a> moves the money. You sign in with CoinPay; there is no other account.</p></div>
 <div class="card" id="advertisers"><h2>Advertisers</h2><ol>
   <li><a href="/advertise">Paste a link</a> and pick a daily budget ($${MIN_DAILY_USD} to $${MAX_DAILY_USD}). We read the page and write the ad: headline, text and a banner.</li>
-  <li>Add budget: pick an amount (from $${MIN_DEPOSIT_USD}) and a coin, send the exact amount to the address shown. Your ads start as soon as it arrives.</li>
+  <li>${ctx.free ? `<b>Free while we launch:</b> your ads run with no budget at all. When paid ads open you can add budget (from $${MIN_DEPOSIT_USD}) in any coin; until then nothing is charged.` : `Add budget: pick an amount (from $${MIN_DEPOSIT_USD}) and a coin, send the exact amount to the address shown. Your ads start as soon as it arrives.`}</li>
   <li>You pay for clicks, about ${usd(CLICK_CENTS)} each, never for views. The bid adjusts itself to spend your daily budget evenly.</li>
   <li>When your balance runs out your ads pause. Add more and they start again. Pause, change the budget or delete an ad any time.</li>
 </ol><p class="muted small">Your balance is what you added minus what your ads spent. We check every few minutes, so an ad can run a few cents past zero; that is on us.</p></div>
@@ -187,7 +188,7 @@ export function advertisePage(ctx: Ctx, o: { balanceCents: number; campaigns: Ca
     title: 'Advertise · ad.network',
     description: 'Run an ad: paste a link, pick a daily budget, add budget in crypto.',
     path: '/advertise',
-    body: `<section class="hero" style="padding-bottom:1rem"><h1>Advertise</h1><p class="tag">Balance <b>${usd(Math.max(0, o.balanceCents))}</b>${o.balanceCents <= 0 ? ' · add budget to start your ads' : ''}</p></section>
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>Advertise</h1><p class="tag">${ctx.free ? '<b>Free while we launch.</b> Your ads run with no balance. ' : ''}Balance <b>${usd(Math.max(0, o.balanceCents))}</b>${!ctx.free && o.balanceCents <= 0 ? ' · add budget to start your ads' : ''}</p></section>
 ${flashNote(o.flash)}${flashNote(o.error, true)}
 <form method="post" action="/advertise" class="card">${csrfField(ctx)}
   <h2>New ad</h2>
@@ -328,6 +329,35 @@ ${flashNote(o.flash)}
 <div class="card"><h2>API key</h2>${o.apiKey ? `<p>Your key, shown once:</p><div class="address"><code>${esc(o.apiKey)}</code><button class="copy" type="button" data-copy="${esc(o.apiKey)}">Copy</button></div><p class="muted small">export ADNETWORK_KEY=${esc(o.apiKey)}</p>` : `<p class="muted small">For the API, the CLI and MCP. ${u.apiKeyHash ? 'You have one; making a new one replaces it.' : ''}</p>`}
 <form method="post" action="/me/key">${csrfField(ctx)}<button class="copy">${u.apiKeyHash ? 'Replace my key' : 'Make a key'}</button></form></div>
 <details class="card"><summary>Delete my account</summary><form method="post" action="/me/delete">${csrfField(ctx)}<button class="copy bad">Stop my ads and sites and delete everything ad.network keeps</button></form><p class="muted small">Withdraw your earnings first. Unspent ad budget is not refunded automatically: ask on <a href="${REPO}/issues">GitHub</a>.</p></details>`,
+  })
+}
+
+/** What a signed-out visitor sees on /advertise or /publish: the offer, then one button to sign in. */
+export function pitchPage(ctx: Ctx, kind: 'advertise' | 'publish'): string {
+  const start = `/auth/start?next=/${kind}`
+  const advertise = kind === 'advertise'
+  const points = advertise
+    ? [
+        ['Paste one link', 'We read your page and write the ad: headline, text and a banner. No design work.'],
+        [ctx.free ? 'Free while we launch' : 'Pay per click', ctx.free ? 'No deposit and no card. Your ad runs across the network today and nothing is charged.' : `About ${usd(CLICK_CENTS)} a click, never for views. Add budget in USDC, BTC, ETH, SOL and more.`],
+        ['Honest counts', 'Bots and repeat clicks are filtered out by crawlproof before anything is counted.'],
+      ]
+    : [
+        ['One tag', 'Paste one tag before </body>. It shows a small ad and counts visits.'],
+        ['Paid to your wallet', `You earn a share of every paid click, in USDC, sent to your own wallet. Withdraw from ${usd(MIN_PAYOUT_CENTS)}.`],
+        ['Advertise back, free', ctx.free ? 'Every publisher can run an ad for their own site across the network, free during the launch.' : 'Run ads for your own site from the same account.'],
+      ]
+  return layout({
+    ctx,
+    title: advertise ? 'Advertise on ad.network' : 'Earn from your site with ad.network',
+    description: advertise ? 'Run an ad from one link. Free while we launch, crypto when you scale.' : 'Paste one tag, add a wallet, get paid in USDC. And advertise your own site free.',
+    path: `/${kind}`,
+    body: `<section class="hero"><h1>${advertise ? (ctx.free ? 'Advertise free while we launch' : 'Advertise from one link') : 'Earn from your site'}</h1>
+<p class="tag">${advertise ? 'Paste the page people should land on. That is the whole setup.' : 'Indie sites, blogs, docs and tools: one tag, one wallet, done.'}</p>
+<p><a class="btn big" href="${start}">${advertise ? (ctx.free ? 'Run my free ad' : 'Run my ad') : 'Add my site'}</a></p>
+<p class="muted small">Sign in with CoinPay (free; you can make an account on the way).</p></section>
+<div class="grid3">${points.map(([h, t], i) => `<div class="card"><h2><span class="step-n">${i + 1}</span>${esc(h!)}</h2><p class="muted">${esc(t!)}</p></div>`).join('')}</div>
+<p class="muted small"><a href="/help#${advertise ? 'advertisers' : 'publishers'}">How it works</a></p>`,
   })
 }
 
