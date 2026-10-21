@@ -32,9 +32,9 @@ export function createMcpServer(client = new AdNetworkClient()): McpServer {
   )
   server.tool(
     'add_budget',
-    'Add ad budget in crypto: returns the address and the EXACT amount to send. Send it from a wallet you control, then call deposit_status. Ads start when it lands.',
-    { amount_usd: z.number().min(5).max(10000), coin: z.string().optional().describe('usdc_sol, usdc_base, usdc_pol, btc, eth, sol…; default usdc_pol') },
-    wrap(({ amount_usd, coin }) => client.fund(amount_usd, coin)),
+    'Add ad budget: returns checkout_url, a CoinPay page where the person pays in any coin or PayPal. Give them the link, then call deposit_status. Ads start when it lands.',
+    { amount_usd: z.number().min(5).max(10000) },
+    wrap(({ amount_usd }) => client.fund(amount_usd)),
   )
   server.tool('deposit_status', "A deposit's status: pending, complete or failed.", { id: z.string().min(1) }, wrap(({ id }) => client.deposit(id)))
   server.tool('ad_stats', 'One ad with fresh views, clicks and spend.', { ref }, wrap(({ ref }) => client.ad(ref)))

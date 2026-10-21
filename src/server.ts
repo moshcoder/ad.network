@@ -65,8 +65,8 @@ const toUsd = (s: unknown) => Number(String(s ?? '').replace(/[$,\s]/g, ''))
 
 export function createApp(deps: Deps) {
   const { store, config } = deps
-  const net = new AdNetwork(store, config)
   const ORIGIN = deps.origin ?? SITE
+  const net = new AdNetwork(store, { origin: ORIGIN, ...config })
   const app = new Hono<Env>()
   const writeLimit = new Limiter(30, 10 * 60_000)
   const authLimit = new Limiter(30, 10 * 60_000)
@@ -190,8 +190,9 @@ export function createApp(deps: Deps) {
     if (!csrfOk(c, form.csrf)) return advertise(c, user, { error: 'That form went stale. Try again.' }, 400)
     if (!writeLimit.allow(`w:${user.sub}`)) return advertise(c, user, { error: 'Too many changes. Wait a few minutes.' }, 429)
     try {
-      const d = await net.fund(user, { amountUsd: toUsd(form.amount), coin: form.coin })
-      return c.redirect(`/deposits/${d.id}`)
+      const d = await net.fund(user, { amountUsd: toUsd(form.amount) })
+      // Straight to CoinPay's hosted checkout; it sends them back to /deposits/:id.
+      return c.redirect(d.checkoutUrl || `/deposits/${d.id}`, 303)
     } catch (e) {
       return advertise(c, user, { error: message(e), values: form }, statusOf(e))
     }
@@ -257,7 +258,7 @@ export function createApp(deps: Deps) {
     if (user instanceof Response) return user
     if (!ownDeposit(c, c.req.param('id'))) return page(c, messagePage(ctxOf(c), { title: 'No such deposit', message: 'That deposit is not yours.' }), 404)
     const d = (await net.followDeposit(c.req.param('id')))!
-    return page(c, depositPage(ctxOf(c), { d, qr: await qrSvg(d.address) }))
+    return page(c, depositPage(ctxOf(c), { d, qr: d.address ? await qrSvg(d.address) : '' }))
   })
 
   // ---- publishers -----------------------------------------------------------------
@@ -388,7 +389,7 @@ export function createApp(deps: Deps) {
     spent_usd: a.spentCents / 100,
     page: `${ORIGIN}/ads/${a.ref}`,
   })
-  const depositJson = (d: DepositRow) => ({ id: d.id, amount_usd: d.amountCents / 100, coin: d.coin, address: d.address, amount_crypto: d.amountCrypto, status: d.status, expires_at: d.expiresAt, page: `${ORIGIN}/deposits/${d.id}` })
+  const depositJson = (d: DepositRow) => ({ id: d.id, amount_usd: d.amountCents / 100, coin: d.coin, address: d.address, amount_crypto: d.amountCrypto, checkout_url: d.checkoutUrl || null, status: d.status, expires_at: d.expiresAt, page: `${ORIGIN}/deposits/${d.id}` })
   const siteJson = (s: Site) => ({
     site: s.host,
     tag: net.embedFor(s),
@@ -447,7 +448,8 @@ export function createApp(deps: Deps) {
     '/api/v1/deposits',
     api(async (c, u) => {
       const b = await body(c)
-      return c.json(depositJson(await net.fund(u, { amountUsd: Number(b.amount_usd), ...(typeof b.coin === 'string' ? { coin: b.coin } : {}) })), 201)
+      // A coin, if sent, is ignored: the buyer picks any coin or PayPal at checkout_url.
+      return c.json(depositJson(await net.fund(u, { amountUsd: Number(b.amount_usd) })), 201)
     }),
   )
   app.get(

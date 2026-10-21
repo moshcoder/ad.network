@@ -40,6 +40,8 @@ export type DepositRow = {
   amountCrypto: string
   status: string
   expiresAt: string | null
+  /** The hosted CoinPay checkout page (any coin or PayPal); '' on older address deposits. */
+  checkoutUrl: string
   createdAt: number
 }
 
@@ -152,6 +154,9 @@ export class Store {
         created_at INTEGER NOT NULL
       );
     `)
+    // Added with hosted checkout sessions; older databases lack the column.
+    const cols = (this.db.query('PRAGMA table_info(deposits)').all() as { name: string }[]).map((c) => c.name)
+    if (!cols.includes('checkout_url')) this.db.exec("ALTER TABLE deposits ADD COLUMN checkout_url TEXT NOT NULL DEFAULT ''")
   }
 
   // ---- people ------------------------------------------------------------
@@ -288,16 +293,16 @@ export class Store {
     })()
   }
 
-  addDeposit(d: Omit<DepositRow, 'createdAt'>, now = Date.now()): DepositRow {
+  addDeposit(d: Omit<DepositRow, 'createdAt' | 'checkoutUrl'> & { checkoutUrl?: string }, now = Date.now()): DepositRow {
     this.db
-      .query('INSERT OR IGNORE INTO deposits (id, sub, amount_cents, coin, address, amount_crypto, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(d.id, d.sub, d.amountCents, d.coin, d.address, d.amountCrypto, d.status, d.expiresAt, now)
+      .query('INSERT OR IGNORE INTO deposits (id, sub, amount_cents, coin, address, amount_crypto, status, expires_at, checkout_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(d.id, d.sub, d.amountCents, d.coin, d.address, d.amountCrypto, d.status, d.expiresAt, d.checkoutUrl ?? '', now)
     return this.deposit(d.id)!
   }
 
   deposit(id: string): DepositRow | null {
     const r: any = this.db.query('SELECT * FROM deposits WHERE id = ?').get(id)
-    return r ? { id: r.id, sub: r.sub, amountCents: r.amount_cents, coin: r.coin, address: r.address, amountCrypto: r.amount_crypto, status: r.status, expiresAt: r.expires_at, createdAt: r.created_at } : null
+    return r ? { id: r.id, sub: r.sub, amountCents: r.amount_cents, coin: r.coin, address: r.address, amountCrypto: r.amount_crypto, status: r.status, expiresAt: r.expires_at, checkoutUrl: r.checkout_url ?? '', createdAt: r.created_at } : null
   }
 
   deposits(sub: string): DepositRow[] {

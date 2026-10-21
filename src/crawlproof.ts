@@ -42,7 +42,23 @@ export type Deposit = {
   amount_crypto?: string | null
   expires_at?: string | null
   checkout_url?: string | null
+  /** checkout "session" answers: the hosted CoinPay page (any coin or PayPal). */
+  checkout_session_id?: string
+  url?: string
+  methods?: string[]
   status: string
+}
+
+/** A deposit as a hosted CoinPay checkout session for one of our people. */
+export type DepositSessionRequest = {
+  amount_usd: number
+  checkout: 'session'
+  customer_email?: string
+  account_id: string
+  property: string
+  success_url: string
+  cancel_url: string
+  reference: string
 }
 
 export type Slot = { id: string; status: string; embed?: string; tracker?: string; existing?: boolean; [k: string]: unknown }
@@ -102,7 +118,7 @@ export class Crawlproof {
     return this.call('DELETE', `/api/ads/v1/campaigns/${encodeURIComponent(id)}`)
   }
 
-  deposit(input: { amount_usd: number; currency: string; reference?: string }): Promise<Deposit> {
+  deposit(input: { amount_usd: number; currency: string; reference?: string } | DepositSessionRequest): Promise<Deposit> {
     return this.call('POST', '/api/ads/v1/deposits', input)
   }
 

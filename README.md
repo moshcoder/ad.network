@@ -14,12 +14,12 @@ Sign in with CoinPay. No other account, no forms.
 - **Web**: https://ad.network.pit.world
 - **CLI / TUI**: `curl -fsSL https://ad.network.pit.world/install.sh | sh`, or `bunx @profullstack/adnetwork`
 - **MCP**: `claude mcp add adnetwork -e ADNETWORK_KEY=an_… -- bunx @profullstack/adnetwork mcp`
-- **API**: `POST /api/v1/ads {"url": "…", "daily_usd": 5}`, `POST /api/v1/deposits {"amount_usd": 25, "coin": "usdc_sol"}`,
+- **API**: `POST /api/v1/ads {"url": "…", "daily_usd": 5}`, `POST /api/v1/deposits {"amount_usd": 25}` (answers a CoinPay checkout_url: any coin or PayPal),
   `POST /api/v1/sites {"site": "example.com"}`; full list at https://ad.network.pit.world/help#agents
 
 ```sh
 adnetwork run https://example.com --daily 5     # an ad
-adnetwork fund 25 usdc_sol                      # address + exact amount
+adnetwork fund 25                               # CoinPay link: any coin or PayPal
 adnetwork site example.com                      # the tag to paste
 adnetwork wallet example.com 0x… usdc_pol
 adnetwork withdraw example.com
