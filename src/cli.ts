@@ -11,7 +11,7 @@ export const HELP = `adnetwork ${VERSION}: run ads, or earn from your site, in c
 
  Advertise
   adnetwork run <url> [--daily 5]            a new ad for that page
-  adnetwork fund <usd> [coin]                add budget: prints the address + exact amount (coin e.g. usdc_sol)
+  adnetwork fund <usd>                       add budget: prints a CoinPay link, pay in any coin or PayPal
   adnetwork deposit <id> [--wait]            a deposit's status; --wait until it lands
   adnetwork ads                              your ads
   adnetwork ad <ref>                         one ad, fresh numbers
@@ -90,12 +90,12 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       }
       case 'run': {
         const a = await client.run(need(rest[0], 'a link'), daily ? Number(daily) : 5)
-        show(a, `${a.ref}: ${a.headline || a.name}\n${a.running ? 'Running.' : `Ready. Add budget to start it: adnetwork fund 25 usdc_sol`}\n${a.page}`)
+        show(a, `${a.ref}: ${a.headline || a.name}\n${a.running ? 'Running.' : `Ready. Add budget to start it: adnetwork fund 25`}\n${a.page}`)
         return 0
       }
       case 'fund': {
-        const d = await client.fund(Number(need(rest[0], 'an amount in USD')), rest[1])
-        show(d, `Send exactly ${d.amount_crypto} ${d.coin.toUpperCase()} to\n${d.address}\n\n${d.expires_at ? `Good until ${d.expires_at}. ` : ''}Watch it: adnetwork deposit ${d.id} --wait\n${d.page}`)
+        const d = await client.fund(Number(need(rest[0], 'an amount in USD')))
+        show(d, `Pay ${money(d.amount_usd)} in any coin or PayPal:\n${d.checkout_url ?? d.page}\n\n${d.expires_at ? `Open until ${d.expires_at}. ` : ''}Watch it: adnetwork deposit ${d.id} --wait`)
         return 0
       }
       case 'deposit': {

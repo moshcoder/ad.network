@@ -4,7 +4,7 @@
  * ADNETWORK_URL points it at another instance.
  */
 export type ApiAd = { ref: string; name: string; url: string; daily_usd: number; running: boolean; wanted: string; status: string; headline: string; body: string; views: number; clicks: number; spent_usd: number; page: string }
-export type ApiDeposit = { id: string; amount_usd: number; coin: string; address: string; amount_crypto: string; status: string; expires_at: string | null; page: string }
+export type ApiDeposit = { id: string; amount_usd: number; coin: string; address: string; amount_crypto: string; checkout_url: string | null; status: string; expires_at: string | null; page: string }
 export type ApiSite = { site: string; tag: string; live: boolean; wallet: string | null; coin: string; earned_usd: number; withdrawable_usd: number; page: string }
 export type ApiMe = { name: string; email: string; balance_usd: number; ads: ApiAd[]; deposits: ApiDeposit[]; sites: ApiSite[] }
 
@@ -56,8 +56,9 @@ export class AdNetworkClient {
   deleteAd(ref: string): Promise<{ ok: boolean }> {
     return this.call('DELETE', `/api/v1/ads/${encodeURIComponent(ref)}`)
   }
-  fund(amountUsd: number, coin?: string): Promise<ApiDeposit> {
-    return this.call('POST', '/api/v1/deposits', { amount_usd: amountUsd, ...(coin ? { coin } : {}) })
+  /** Opens a CoinPay checkout for that much ad budget: pay at checkout_url in any coin or PayPal. */
+  fund(amountUsd: number): Promise<ApiDeposit> {
+    return this.call('POST', '/api/v1/deposits', { amount_usd: amountUsd })
   }
   deposit(id: string): Promise<ApiDeposit> {
     return this.call('GET', `/api/v1/deposits/${encodeURIComponent(id)}`)

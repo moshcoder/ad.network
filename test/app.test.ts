@@ -14,6 +14,8 @@ function fakes() {
     sub: 'u-alice',
     campaigns: new Map<string, any>(),
     deposits: new Map<string, any>(),
+    depositBodies: [] as any[],
+    checkoutHost: 'cp.test',
     slots: new Map<string, any>(),
     withdrawn: [] as string[],
     calls: [] as string[],
@@ -53,6 +55,13 @@ function fakes() {
       return json(200, c)
     }
     if (path === '/api/ads/v1/deposits' && method === 'POST') {
+      s.depositBodies.push(body)
+      if (body.checkout === 'session') {
+        const id = `cs_test${String(++n).padStart(20, '0')}`
+        const d = { checkout_session_id: id, payment_id: id, url: `https://${s.checkoutHost}/checkout/${id}`, checkout_url: `https://${s.checkoutHost}/checkout/${id}`, amount_usd: body.amount_usd, credits: body.amount_usd * 20, methods: ['USDC_POL', 'BTC', 'PAYPAL'], expires_at: '2026-10-21T15:00:00Z', status: 'open' }
+        s.deposits.set(id, { ...d, status: 'pending' })
+        return json(201, d)
+      }
       const d = { payment_id: `pay${++n}`, amount_usd: body.amount_usd, credits: body.amount_usd * 20, currency: body.currency, address: 'So1Deposit', amount_crypto: String(body.amount_usd), expires_at: null, status: 'pending' }
       s.deposits.set(d.payment_id, d)
       return json(201, d)
@@ -193,12 +202,31 @@ describe('ad.network', () => {
     expect(t.f.s.tokenOf[0]).toBe('/api/ads/v1/campaigns Bearer crp_ADS')
     expect(await (await t.req(`/ads/${ref}?made=1`)).text()).toContain('Add budget and it starts.')
 
-    // Add $25 in USDC on Solana.
-    const funded = await t.req('/advertise/fund', { method: 'POST', form: { csrf: await t.csrf('/advertise'), amount: '25', coin: 'usdc_sol' } })
-    const depositId = funded.headers.get('location')!.split('/').pop()!
+    // The form has no coin picker: CoinPay's page offers every coin and PayPal.
+    const advertiseHtml = await (await t.req('/advertise')).text()
+    expect(advertiseHtml).not.toContain('name="coin"')
+    expect(advertiseHtml).toContain('any coin (USDC, USDT, BTC, ETH, SOL and more) or PayPal')
+
+    // Add $25: straight to CoinPay's hosted checkout.
+    const funded = await t.req('/advertise/fund', { method: 'POST', form: { csrf: await t.csrf('/advertise'), amount: '25' } })
+    expect(funded.status).toBe(303)
+    const checkoutUrl = funded.headers.get('location')!
+    expect(checkoutUrl).toMatch(/^https:\/\/cp\.test\/checkout\/cs_/)
+    const depositId = checkoutUrl.split('/').pop()!
+    expect(t.f.s.depositBodies.at(-1)).toEqual({
+      amount_usd: 25,
+      checkout: 'session',
+      customer_email: 'u-alice@example.com',
+      account_id: 'u-alice',
+      property: 'ad.network.pit.world',
+      success_url: 'https://ad.network.pit.world/deposits/{CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://ad.network.pit.world/advertise',
+      reference: 'ad.network:u-alice',
+    })
+    expect(t.store.deposit(depositId)).toMatchObject({ sub: 'u-alice', amountCents: 2500, status: 'pending', checkoutUrl })
     const page = await (await t.req(`/deposits/${depositId}`)).text()
-    expect(page).toContain('So1Deposit')
-    expect(page).toContain('<svg class="qr"')
+    expect(page).toContain(`href="${checkoutUrl}"`)
+    expect(page).not.toContain('<svg class="qr"')
     expect(t.net.balanceCents('u-alice')).toBe(0)
 
     // It lands: the ad starts.
@@ -302,6 +330,21 @@ describe('ad.network', () => {
     expect((await t.req('/publish', { method: 'POST', form: { csrf: await t.csrf('/publish'), site: 'contested.org' } })).status).toBe(409)
   })
 
+  test('a deposit never sends anyone off CoinPay, and old address deposits still render', async () => {
+    const t = setup()
+    await t.signIn()
+    t.f.s.checkoutHost = 'evil.example'
+    const r = await t.req('/advertise/fund', { method: 'POST', form: { csrf: await t.csrf('/advertise'), amount: '25' } })
+    expect(r.status).toBe(502)
+    expect(t.store.pendingDeposits('u-alice')).toEqual([])
+
+    t.store.addDeposit({ id: 'pay-old', sub: 'u-alice', amountCents: 1000, coin: 'usdc_sol', address: 'So1Old', amountCrypto: '10', status: 'pending', expiresAt: null })
+    t.f.s.deposits.set('pay-old', { payment_id: 'pay-old', status: 'pending' })
+    const page = await (await t.req('/deposits/pay-old')).text()
+    expect(page).toContain('So1Old')
+    expect(page).toContain('<svg class="qr"')
+  })
+
   test('the API, the CLI and the TUI all drive the same account', async () => {
     const t = setup()
     await t.signIn()
@@ -315,8 +358,8 @@ describe('ad.network', () => {
     const out = { log: (s: string) => lines.push(s), error: (s: string) => lines.push(`ERR ${s}`) }
     expect(await main(['run', 'https://agents.example.net/', '--daily', '7'], out, client)).toBe(0)
     expect(lines.at(-1)).toContain('Add budget to start it')
-    expect(await main(['fund', '10', 'usdc_base', '--json'], out, client)).toBe(0)
-    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ amount_usd: 10, coin: 'usdc_base', address: 'So1Deposit' })
+    expect(await main(['fund', '10', '--json'], out, client)).toBe(0)
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ amount_usd: 10, coin: 'checkout', checkout_url: expect.stringMatching(/^https:\/\/cp\.test\/checkout\/cs_/) })
     expect(await main(['site', 'agentblog.dev'], out, client)).toBe(0)
     expect(lines.at(-1)).toContain('data-ad-network=')
     expect(await main(['nope'], out, client)).toBe(2)

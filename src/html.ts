@@ -8,7 +8,7 @@ import type { Campaign, DepositRow, Site, User, Withdrawal } from './db.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter } from './ring-footer.js'
-import { CLICK_CENTS, coinName, DEPOSIT_COINS, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd } from './service.js'
+import { CLICK_CENTS, coinName, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd } from './service.js'
 
 export const SITE = 'https://ad.network.pit.world'
 export const REPO = 'https://github.com/moshcoder/ad.network'
@@ -95,7 +95,7 @@ export function homePage(ctx: Ctx): string {
     body: `<section class="hero">
   <h1>Ads, the simple way.</h1>
   <p class="tag">Paste a link and a daily budget, and your ad runs across the network. Or paste one tag into your site and get paid to your wallet. Crypto in, crypto out, no forms.</p>
-  ${ctx.free ? `<p class="tag"><b>Free while we launch:</b> advertising costs nothing right now. No deposit, no card. Paste a link and your ad runs today.</p>` : ''}
+  ${ctx.free ? `<p class="tag"><b>Free while we launch:</b> advertising costs nothing right now. No deposit needed. Paste a link and your ad runs today.</p>` : ''}
 </section>
 <div class="grid2">
   <a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">${ctx.free ? 'Paste the page people should land on. We write the ad from it and it runs across the network, free during the launch.' : 'Paste the page people should land on. We write the ad from it. Add budget in USDC, BTC, ETH or SOL. It runs until the budget does.'}</p><span class="btn">${ctx.free ? 'Run a free ad' : 'Run an ad'}</span></a>
@@ -110,7 +110,7 @@ export function homePage(ctx: Ctx): string {
   <h2>Built for agents too</h2>
   <p class="muted">Everything is an API, a CLI and an MCP server. An agent can run its own ads:</p>
   <pre>bunx @profullstack/adnetwork run https://example.com --daily 5
-bunx @profullstack/adnetwork fund 25 usdc_sol
+bunx @profullstack/adnetwork fund 25
 claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre>
   <p class="muted small"><a href="/help#agents">API and keys</a></p>
 </div>`,
@@ -127,7 +127,7 @@ export function helpPage(ctx: Ctx): string {
 <div class="card"><h2>What is it?</h2><p>ad.network is the simple front door to the <a href="${CRAWLPROOF}/ads">crawlproof</a> ad network. crawlproof writes the ads, runs the auction, serves them across its sites and counts honestly (bots and repeat clicks are not charged). <a href="${COINPAY}">CoinPay</a> moves the money. You sign in with CoinPay; there is no other account.</p></div>
 <div class="card" id="advertisers"><h2>Advertisers</h2><ol>
   <li><a href="/advertise">Paste a link</a> and pick a daily budget ($${MIN_DAILY_USD} to $${MAX_DAILY_USD}). We read the page and write the ad: headline, text and a banner.</li>
-  <li>${ctx.free ? `<b>Free while we launch:</b> your ads run with no budget at all. When paid ads open you can add budget (from $${MIN_DEPOSIT_USD}) in any coin; until then nothing is charged.` : `Add budget: pick an amount (from $${MIN_DEPOSIT_USD}) and a coin, send the exact amount to the address shown. Your ads start as soon as it arrives.`}</li>
+  <li>${ctx.free ? `<b>Free while we launch:</b> your ads run with no budget at all. When paid ads open you can add budget (from $${MIN_DEPOSIT_USD}) in any coin or PayPal; until then nothing is charged.` : `Add budget: pick an amount (from $${MIN_DEPOSIT_USD}) and pay on CoinPay in any coin or PayPal. Your ads start as soon as it arrives.`}</li>
   <li>You pay for clicks, about ${usd(CLICK_CENTS)} each, never for views. The bid adjusts itself to spend your daily budget evenly.</li>
   <li>When your balance runs out your ads pause. Add more and they start again. Pause, change the budget or delete an ad any time.</li>
 </ol><p class="muted small">Your balance is what you added minus what your ads spent. We check every few minutes, so an ad can run a few cents past zero; that is on us.</p></div>
@@ -145,7 +145,7 @@ POST   /api/v1/ads                        {"url": "https://…", "daily_usd": 5}
 GET    /api/v1/ads/:ref                   one ad, fresh numbers
 PATCH  /api/v1/ads/:ref                   {"running": false} or {"daily_usd": 10}
 DELETE /api/v1/ads/:ref
-POST   /api/v1/deposits                   {"amount_usd": 25, "coin": "usdc_sol"} -> address + exact amount
+POST   /api/v1/deposits                   {"amount_usd": 25} -> checkout_url: pay there in any coin or PayPal
 GET    /api/v1/deposits/:id               pending, complete or failed
 POST   /api/v1/sites                      {"site": "example.com"} -> the tag to paste
 GET    /api/v1/sites/:site
@@ -158,7 +158,7 @@ DELETE /api/v1/sites/:site
 <pre>curl -fsSL ${SITE}/install.sh | sh          installs the adnetwork CLI (needs bun)
 adnetwork                                  the TUI
 adnetwork run https://example.com --daily 5
-adnetwork fund 25 usdc_sol
+adnetwork fund 25
 adnetwork site example.com
 claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre></div>
 <div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, your sign-in (encrypted), which ads and sites are yours, and your deposits. Delete it all on <a href="/me">your page</a>.</p></div>
@@ -173,10 +173,9 @@ function adRow(c: Campaign): string {
   return `<tr><td><a href="/ads/${esc(c.ref)}">${esc(c.name || c.url)}</a><br><span class="muted small">${esc(c.url)}</span></td><td>${usd(c.dailyBudgetCents)}/day</td><td>${c.impressions.toLocaleString('en-US')}</td><td>${c.clicks.toLocaleString('en-US')}</td><td>${usd(c.spentCents)}</td><td><span class="status ${esc(c.status)}">${esc(shown)}</span></td></tr>`
 }
 
-function fundForm(ctx: Ctx, values: { amount?: string; coin?: string } = {}): string {
+function fundForm(ctx: Ctx, values: { amount?: string } = {}): string {
   return `<form method="post" action="/advertise/fund" class="row">${csrfField(ctx)}
   <input name="amount" inputmode="decimal" placeholder="Amount (USD)" value="${esc(values.amount ?? '25')}" aria-label="Amount in USD">
-  <select name="coin" aria-label="Coin">${DEPOSIT_COINS.map((c) => `<option value="${esc(c)}" ${values.coin === c ? 'selected' : ''}>${esc(coinName(c))}</option>`).join('')}</select>
   <button class="btn">Add budget</button></form>`
 }
 
@@ -199,7 +198,7 @@ ${flashNote(o.flash)}${flashNote(o.error, true)}
   <p class="muted small">About ${usd(CLICK_CENTS)} a click; $5 a day is roughly 25 clicks. We write the ad from your page; it takes up to a minute.</p>
   <p><button class="btn wide big">Run my ad</button></p>
 </form>
-<div class="card"><h2>Add budget</h2><p class="muted small">Crypto, from $${MIN_DEPOSIT_USD}. Your ads start the moment it lands.</p>${fundForm(ctx, { amount: v.amount, coin: v.coin })}</div>
+<div class="card"><h2>Add budget</h2><p class="muted small">From $${MIN_DEPOSIT_USD}. You pay on CoinPay in any coin (USDC, USDT, BTC, ETH, SOL and more) or PayPal. Your ads start the moment it lands.</p>${fundForm(ctx, { amount: v.amount })}</div>
 <div class="card"><h2>Your ads</h2>${o.campaigns.length ? `<table><thead><tr><th>Ad</th><th>Budget</th><th>Views</th><th>Clicks</th><th>Spent</th><th></th></tr></thead><tbody>${o.campaigns.map(adRow).join('')}</tbody></table>` : '<p class="muted">None yet.</p>'}</div>
 ${o.deposits.length ? `<div class="card"><h2>Deposits</h2><table><thead><tr><th>When</th><th>Amount</th><th>Coin</th><th>Status</th></tr></thead><tbody>${o.deposits.map((d) => `<tr><td>${when(d.createdAt)}</td><td>${usd(d.amountCents)}</td><td>${esc(coinName(d.coin))}</td><td><a class="status ${esc(d.status)}" href="/deposits/${esc(d.id)}">${esc(d.status)}</a></td></tr>`).join('')}</tbody></table></div>` : ''}`,
   })
@@ -239,11 +238,16 @@ export function depositPage(ctx: Ctx, o: { d: DepositRow; qr: string }): string 
     noindex: true,
     script: true,
     title: `Add ${usd(d.amountCents)} · ad.network`,
-    description: 'Send the exact amount to the address shown.',
+    description: d.checkoutUrl ? 'Pay on CoinPay in any coin or PayPal.' : 'Send the exact amount to the address shown.',
     path: `/deposits/${d.id}`,
     body: `<section class="payee" style="padding-top:2rem"><p class="muted" style="margin:0">Ad budget</p>
 <p class="amount">${usd(d.amountCents)}</p>
 <p><span class="status ${esc(d.status)}" id="status" data-deposit="${esc(d.id)}">${paid ? 'paid' : esc(d.status)}</span></p></section>
+<div class="card center" id="checkout-box" ${paid || !d.checkoutUrl || d.status !== 'pending' ? 'hidden' : ''}>
+  <p>Pay on CoinPay in any coin (USDC, USDT, BTC, ETH, SOL and more) or PayPal.</p>
+  <p><a class="btn big" href="${esc(d.checkoutUrl)}" rel="noopener">Pay ${usd(d.amountCents)}</a></p>
+  <p class="muted small">${d.expiresAt ? `Open until ${esc(new Date(d.expiresAt).toUTCString().replace(' GMT', ' UTC'))}. ` : ''}Paid already? This page updates by itself once it lands.</p>
+</div>
 <div class="card" id="pay-box" ${paid || !d.address ? 'hidden' : ''}>
   <p class="center">Send exactly</p>
   <p class="amount" style="font-size:1.6rem">${esc(d.amountCrypto)} <span class="muted">${esc(coinName(d.coin))}</span></p>
@@ -339,7 +343,7 @@ export function pitchPage(ctx: Ctx, kind: 'advertise' | 'publish'): string {
   const points = advertise
     ? [
         ['Paste one link', 'We read your page and write the ad: headline, text and a banner. No design work.'],
-        [ctx.free ? 'Free while we launch' : 'Pay per click', ctx.free ? 'No deposit and no card. Your ad runs across the network today and nothing is charged.' : `About ${usd(CLICK_CENTS)} a click, never for views. Add budget in USDC, BTC, ETH, SOL and more.`],
+        [ctx.free ? 'Free while we launch' : 'Pay per click', ctx.free ? 'No deposit needed. Your ad runs across the network today and nothing is charged.' : `About ${usd(CLICK_CENTS)} a click, never for views. Add budget in USDC, BTC, ETH, SOL and more, or PayPal.`],
         ['Honest counts', 'Bots and repeat clicks are filtered out by crawlproof before anything is counted.'],
       ]
     : [

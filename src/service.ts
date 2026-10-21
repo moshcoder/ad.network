@@ -24,6 +24,8 @@ import type { Campaign, DepositRow, Site, Store, User } from './db.js'
 
 export type Config = {
   coinpayBase: string
+  /** This site's public origin: CoinPay's property and where checkout sends people back. */
+  origin?: string
   clientId: string
   clientSecret?: string
   crawlproofBase: string
@@ -62,12 +64,13 @@ export const MIN_PAYOUT_CENTS = 500
 /** How long a claim may sit unproven before someone who proves the site can take it. */
 export const CLAIM_GRACE_MS = 24 * 3600_000
 
-/** Coins a deposit can be paid in, stablecoins first. */
-export const DEPOSIT_COINS = COINS.map((c) => c.id) as string[]
+/** What a deposit row's coin says when the buyer picks on CoinPay's page. */
+export const CHECKOUT_COIN = 'checkout'
 /** Coins crawlproof pays publishers in. */
 export const PAYOUT_COINS = ['usdc_pol', 'usdc_sol', 'usdc_base', 'usdc_eth'] as const
 
 export function coinName(id: string): string {
+  if (id === CHECKOUT_COIN) return 'Any coin or PayPal'
   return COINS.find((c) => c.id === id)?.name ?? id.toUpperCase()
 }
 
@@ -313,18 +316,37 @@ export class AdNetwork {
     }
   }
 
-  async fund(user: User, input: { amountUsd: number; coin?: string }): Promise<DepositRow> {
+  /**
+   * Opens a hosted CoinPay checkout session for ad budget (crawlproof's
+   * business takes the money and credits the shared advertiser account). The
+   * person picks any coin or PayPal on CoinPay's page; the row here, keyed by
+   * the cs_ id, is what credits their own balance once it is paid.
+   */
+  async fund(user: User, input: { amountUsd: number }): Promise<DepositRow> {
     const amount = Math.round(Number(input.amountUsd) * 100) / 100
     if (!Number.isFinite(amount) || amount < MIN_DEPOSIT_USD || amount > MAX_DEPOSIT_USD) throw new UserError(`Add $${MIN_DEPOSIT_USD} to $${MAX_DEPOSIT_USD.toLocaleString('en-US')}.`, 'amount')
-    const coin = input.coin && DEPOSIT_COINS.includes(input.coin) ? input.coin : 'usdc_pol'
     if (this.store.pendingDeposits(user.sub).length >= 5) throw new UserError('You have five unpaid deposits open. Pay one or wait for them to expire.')
+    const origin = (this.config.origin ?? 'https://ad.network.pit.world').replace(/\/+$/, '')
     let d
     try {
-      d = await this.ads.deposit({ amount_usd: amount, currency: coin, reference: `ad.network:${user.sub}` })
+      d = await this.ads.deposit({
+        amount_usd: amount,
+        checkout: 'session',
+        ...(user.email ? { customer_email: user.email } : {}),
+        account_id: user.sub,
+        property: new URL(origin).hostname,
+        success_url: `${origin}/deposits/{CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/advertise`,
+        reference: `ad.network:${user.sub}`,
+      })
     } catch (e) {
       throw new UserError(e instanceof CrawlproofError && e.status < 500 ? e.message : 'The payment service did not answer. Try again in a minute.', undefined, 502)
     }
-    return this.store.addDeposit({ id: d.payment_id, sub: user.sub, amountCents: Math.round(amount * 100), coin, address: d.address ?? '', amountCrypto: d.amount_crypto ?? '', status: 'pending', expiresAt: d.expires_at ?? null })
+    const id = d.checkout_session_id ?? d.payment_id
+    const url = d.url ?? d.checkout_url ?? ''
+    // Only ever send people to CoinPay's own page.
+    if (!id || !url || new URL(url).origin !== new URL(this.config.coinpayBase).origin) throw new UserError('The payment service answered oddly. Try again in a minute.', undefined, 502)
+    return this.store.addDeposit({ id, sub: user.sub, amountCents: Math.round(amount * 100), coin: CHECKOUT_COIN, address: '', amountCrypto: '', status: 'pending', expiresAt: d.expires_at ?? null, checkoutUrl: url })
   }
 
   /** A deposit's status, asked of crawlproof while it is open; a paid one starts the owner's ads. */

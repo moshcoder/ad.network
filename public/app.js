@@ -18,7 +18,8 @@ if (status && status.dataset.deposit) {
         const paid = d.status === 'complete'
         status.className = 'status ' + d.status
         status.textContent = paid ? 'paid' : d.status
-        document.getElementById('pay-box').hidden = paid
+        // Only ever hide the ways to pay; the server decides which one shows.
+        if (d.status !== 'pending') for (const id of ['pay-box', 'checkout-box']) { const el = document.getElementById(id); if (el) el.hidden = true }
         document.getElementById('paid-box').hidden = !paid
         if (d.status !== 'pending') return
       }
