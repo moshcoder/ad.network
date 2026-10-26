@@ -12,11 +12,28 @@
   "bin": {
     "adnetwork": "bin/adnetwork"
   },
-  "files": ["bin/adnetwork", "src", "public", "README.md", "LICENSE"],
+  "files": [
+    "bin/adnetwork",
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "bun": ">=1.1"
   },
-  "keywords": ["ads", "advertising", "ad network", "publishers", "crypto", "usdc", "mcp", "agents", "crawlproof", "coinpay"],
+  "keywords": [
+    "ads",
+    "advertising",
+    "ad network",
+    "publishers",
+    "crypto",
+    "usdc",
+    "mcp",
+    "agents",
+    "crawlproof",
+    "coinpay"
+  ],
   "scripts": {
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
@@ -36,5 +53,8 @@
     "@types/bun": "^1.4.4",
     "@types/qrcode": "^1.5.6",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "zod": "^4.6.7"
   }
 }
