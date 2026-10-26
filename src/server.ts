@@ -14,7 +14,7 @@ import { Sealer, Store, type Campaign, type DepositRow, type Site, type User } f
 import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, pitchPage, publishPage, sitePage, SITE, type Ctx } from './html.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
-import { ringDescriptor, startRingFooterRefresh } from './ring-footer.js'
+import { ringDescriptor, ringFooterScriptHashes, startRingFooterRefresh } from './ring-footer.js'
 import { AdNetwork, newApiKey, UserError, type Config } from './service.js'
 import { VERSION } from './version.js'
 
@@ -25,7 +25,10 @@ const SESSION = 'an_session'
 const SCOPES = ['openid', 'profile', 'email', 'wallet:read']
 
 const SECURITY_HEADERS: Record<string, string> = {
-  'content-security-policy': "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' https://crawlproof.com; img-src 'self' data: https://built.indie.pit.world https://pwamart.com; connect-src 'self' https://crawlproof.com; frame-src https://crawlproof.com; form-action 'self' https://coinpayportal.com; base-uri 'none'; frame-ancestors 'none'",
+  // https://pit.world: the footer's newsletter form posts to pit.world/api/subscribe
+  // (connect-src) and falls back to a plain POST to pit.world/subscribe (form-action).
+  // script-src also gets the footer's inline-script hashes, added per response below.
+  'content-security-policy': "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' https://crawlproof.com; img-src 'self' data: https://built.indie.pit.world https://pwamart.com; connect-src 'self' https://crawlproof.com https://pit.world; frame-src https://crawlproof.com; form-action 'self' https://coinpayportal.com https://pit.world; base-uri 'none'; frame-ancestors 'none'",
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -89,6 +92,10 @@ export function createApp(deps: Deps) {
   app.use('*', async (c, next) => {
     await next()
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) c.header(k, v)
+    const footerScripts = ringFooterScriptHashes()
+    if (footerScripts) {
+      c.header('content-security-policy', SECURITY_HEADERS['content-security-policy']!.replace("script-src 'self'", `script-src 'self' ${footerScripts}`))
+    }
   })
 
   app.get('/health', (c) => c.json({ ok: true, version: VERSION }))
