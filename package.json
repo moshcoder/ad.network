@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/adnetwork",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "ad.network: run ads, or earn from your site, in crypto. Paste a link and a budget, or paste one tag and add a wallet. Web, API, CLI, TUI and MCP; ads by crawlproof, payments by CoinPay.",
   "license": "MIT",
   "type": "module",
@@ -42,10 +42,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@profullstack/affiliates": "0.3.0",
     "@profullstack/coinpay-onboard": "^0.2.0",
     "@profullstack/footer": "^0.4.0",
     "@profullstack/hqtui": "^0.11.0",
+    "@profullstack/redeem-credits": "0.2.0",
     "hono": "^4.13.14",
+    "mailchecker": "^6.0.21",
     "qrcode": "^1.5.4",
     "zod": "^4.6.7"
   },

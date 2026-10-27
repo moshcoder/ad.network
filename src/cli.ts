@@ -27,6 +27,11 @@ export const HELP = `adnetwork ${VERSION}: run ads, or earn from your site, in c
   adnetwork withdraw <site>
   adnetwork remove <site>
 
+  adnetwork redeem <code>                    redeem a credit code for ad credit
+  adnetwork invites                          your invites (scarce: 3 each)
+  adnetwork invite [note]                    make an invite link
+  adnetwork accept <invite-code>             accept an invite on your new account
+
   adnetwork mcp                              MCP server: claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp
   adnetwork serve [--port N]                 run your own instance
 
@@ -155,6 +160,26 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'withdraw': {
         const r = await client.withdraw(need(rest[0], 'a site'))
         show(r, `${money(r.amount_usd)} ${r.status === 'requested' ? 'queued' : 'sent'}.`)
+        return 0
+      }
+      case 'redeem': {
+        const r = await client.redeem(need(rest[0], 'a credit code'))
+        show(r, `${money(r.credit_usd)} of ad credit added. Balance ${money(r.balance_usd)}.`)
+        return 0
+      }
+      case 'invites': {
+        const r = await client.invites()
+        show(r, `${r.quota.left} of ${r.quota.total} invites left${r.can_invite ? '' : ` (${r.why_not})`}. Each accepted invite: ${money(r.bonus_usd)} of ad credit for both of you.\n${r.invites.map((i) => `  ${i.used ? 'used' : 'open'}  ${i.created_at.slice(0, 10)}  ${i.note || 'invite'}`).join('\n') || '  none yet: adnetwork invite'}`)
+        return 0
+      }
+      case 'invite': {
+        const r = await client.createInvite(rest.join(' ') || undefined)
+        show(r, `${r.link}\nShown once. ${r.left} left.`)
+        return 0
+      }
+      case 'accept': {
+        const r = await client.acceptInvite(need(rest[0], 'an invite code'))
+        show(r, r.bonus_usd ? `Accepted: ${money(r.bonus_usd)} of ad credit added.` : `Accepted${r.no_bonus ? ` (no bonus: ${r.no_bonus})` : ''}.`)
         return 0
       }
       case 'remove': {

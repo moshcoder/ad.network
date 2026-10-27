@@ -38,6 +38,14 @@ Deposits buy ad budget at face value ($1 = $1 of clicks) through crawlproof's
 partner deposit API. A site is yours once we see your tag on it: every tag carries a
 claim code for one person, and withdrawals wait for it.
 
+## Credit codes and invites
+
+- **Credit codes** (`@profullstack/redeem-credits`, unit `usd_cents`) are ad credit. Mint on dev2:
+  `cd /opt/ad.network && bun node_modules/@profullstack/redeem-credits/dist/cli.js mint --db /root/.local/share/ad-network/ad-network.db --unit usd_cents --amount 1000 --prefix AD --label "for X" [--max N] [--expires 90d]`
+  (also `list`, `revoke <id>`). Redeem at `/me` ("Have a code?"), `POST /api/v1/credits/redeem`, `adnetwork redeem`, MCP `redeem_credit_code`.
+- **Invites** (`@profullstack/affiliates`): 3 per account, `/invites`, `/i/<code>` (cookie `an_invite`, accepted at the CoinPay sign-in, or paste the code on `/invites`). One accepted invite per account, accounts under 7 days old; senders must be a day old. Both sides get `ADNETWORK_INVITE_BONUS_CENTS` (default 500) of ad credit, except throwaway addresses, the inviter's own mailbox (+tag / Gmail dots), house accounts; the inviter's half stops at `ADNETWORK_INVITE_MONTHLY_CAP` (5) per 30 days.
+- **Where ad credit lives.** Every grant goes to crawlproof first (`POST /api/ads/v1/grants`): it lands on the shared advertiser account as `ad_bonus_credits`, which runs ads but pays no publisher, so credit nobody paid for can never be withdrawn as crypto. Then a `deposits` row (coin `credit`, id `credit:<source>`) adds it to the person's balance here. Both are idempotent on the source.
+
 ## Run it
 
 ```sh

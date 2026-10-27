@@ -20,6 +20,8 @@ function fakes() {
     withdrawn: [] as string[],
     calls: [] as string[],
     tokenOf: [] as string[],
+    grants: new Map<string, number>(),
+    grantsDown: false,
   }
   let n = 0
   const fetchImpl = (async (url: string | URL, init: RequestInit = {}) => {
@@ -87,6 +89,14 @@ function fakes() {
       if (method === 'PATCH') Object.assign(slot, body)
       return json(200, slot)
     }
+    if (path === '/api/ads/v1/grants' && method === 'POST') {
+      if (s.grantsDown) return json(503, { error: 'down' })
+      const applied = !s.grants.has(body.reference)
+      if (applied) s.grants.set(body.reference, Math.floor(Math.round(body.amount_usd * 100) / 5))
+      const credits = s.grants.get(body.reference)!
+      const total = [...s.grants.values()].reduce((a, b) => a + b, 0)
+      return json(applied ? 201 : 200, { reference: body.reference, applied, credits, amount_usd: (credits * 5) / 100, ad_bonus_credits: total, spend_only: true })
+    }
     return json(404, { error: `no ${method} ${path}` })
   }) as typeof fetch
   return { s, fetchImpl }
@@ -96,7 +106,7 @@ function setup(extra: { freeAds?: boolean } = {}) {
   const f = fakes()
   const pages = new Map<string, string>()
   const store = new Store(':memory:', new Sealer(KEY))
-  const { app, net } = createApp({
+  const { app, net, rewards } = createApp({
     store,
     secureCookies: false,
     origin: 'https://ad.network.pit.world',
@@ -124,7 +134,8 @@ function setup(extra: { freeAds?: boolean } = {}) {
     return req(`/auth/callback?code=c1&state=${encodeURIComponent(loc.searchParams.get('state')!)}`)
   }
   const csrf = async (path: string) => /name="csrf" value="([0-9a-f]+)"/.exec(await (await req(path)).text())?.[1] ?? ''
-  return { f, store, net, req, signIn, csrf, pages }
+  const age = (sub: string, days: number) => store.db.query('UPDATE users SET created_at = ? WHERE sub = ?').run(Date.now() - days * 86_400_000, sub)
+  return { f, store, net, rewards, req, signIn, csrf, pages, age }
 }
 
 describe('ad.network', () => {
@@ -401,5 +412,119 @@ describe('ad.network', () => {
     expect(() => cleanHost('printer.local')).toThrow()
     expect(['127.0.0.1', '10.1.2.3', '192.168.1.1', '172.20.0.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:10.0.0.1'].every(privateAddress)).toBe(true)
     expect(['8.8.8.8', '23.95.228.174', '2606:4700::1111'].some(privateAddress)).toBe(false)
+  })
+})
+
+describe('credit codes and invites', () => {
+  test('a code adds spend-only ad credit through crawlproof, once', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    const { code, id } = await t.rewards.credits.mint({ grant: { unit: 'usd_cents', amount: 1000 }, prefix: 'AD' })
+    const me = await t.req('/me')
+    expect(await me.text()).toContain('Have a code?')
+    const r = await t.req('/me/redeem', { method: 'POST', form: { csrf: await t.csrf('/me'), code: code.toLowerCase() } })
+    expect(await r.text()).toContain('10.00 USD of ad credit added')
+    expect(t.net.balanceCents('u-alice')).toBe(1000)
+    expect(t.f.s.grants.get(`ad.network:u-alice:code:${id}`)).toBe(200)
+    expect(t.store.deposit(`credit:code:${id}`)).toMatchObject({ coin: 'credit', status: 'complete', amountCents: 1000 })
+    const again = await t.req('/me/redeem', { method: 'POST', form: { csrf: await t.csrf('/me'), code } })
+    expect(again.status).toBe(400)
+    expect(await again.text()).toContain('You already redeemed that code.')
+    expect(t.net.balanceCents('u-alice')).toBe(1000)
+    expect(t.f.s.grants.size).toBe(1)
+  })
+
+  test('a grant crawlproof did not take is finished on the next try, never doubled', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    const { code, id } = await t.rewards.credits.mint({ grant: { unit: 'usd_cents', amount: 500 } })
+    t.f.s.grantsDown = true
+    const r = await t.req('/me/redeem', { method: 'POST', form: { csrf: await t.csrf('/me'), code } })
+    expect(r.status).toBe(502)
+    expect(t.net.balanceCents('u-alice')).toBe(0)
+    t.f.s.grantsDown = false
+    await t.req('/me/redeem', { method: 'POST', form: { csrf: await t.csrf('/me'), code } })
+    expect(t.net.balanceCents('u-alice')).toBe(500)
+    expect(t.f.s.grants.get(`ad.network:u-alice:code:${id}`)).toBe(100)
+  })
+
+  test('invites: one per account; concurrent accepts, one wins and the other stays unused', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    await t.signIn('u-bob')
+    t.age('u-alice', 3)
+    t.age('u-bob', 3)
+    const alice = t.store.user('u-alice')!
+    const bob = t.store.user('u-bob')!
+    const ia = await t.rewards.createInvite(alice)
+    const ib = await t.rewards.createInvite(bob)
+    await t.signIn('u-carol')
+    const carol = t.store.user('u-carol')!
+    const [ra, rb] = await Promise.all([t.rewards.acceptInvite(carol, ia.code), t.rewards.acceptInvite(carol, ib.code)])
+    const won = [ra, rb].filter((r) => r.ok)
+    const lost = [ra, rb].filter((r) => !r.ok) as { ok: false; reason: string }[]
+    expect(won).toHaveLength(1)
+    expect(lost[0]!.reason).toBe('already_invited')
+    expect(t.net.balanceCents('u-carol')).toBe(500)
+    const winner = ra.ok ? 'u-alice' : 'u-bob'
+    const loser = ra.ok ? 'u-bob' : 'u-alice'
+    expect(t.net.balanceCents(winner)).toBe(500)
+    expect(t.net.balanceCents(loser)).toBe(0)
+    expect((await t.rewards.affiliates.invites(loser))[0]!.usedBy).toBeNull()
+  })
+
+  test('invites arrive through /i/<code> and are accepted at CoinPay sign-in', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    t.age('u-alice', 3)
+    const html = await (await t.req('/invites', { method: 'POST', form: { csrf: await t.csrf('/invites'), note: 'for dan' } })).text()
+    const link = /https:\/\/ad\.network\.pit\.world\/i\/(INV-[A-Z0-9-]+)/.exec(html)![1]!
+    t.f.s.sub = 'u-dan'
+    const landing = await t.req(`/i/${link}`)
+    expect(landing.status).toBe(200)
+    expect(await landing.text()).toContain("You're invited")
+    // the landing set the an_invite cookie; sign in with it in the jar
+    const start = await t.req('/auth/start?next=/invites')
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!
+    const cb = await t.req(`/auth/callback?code=c1&state=${encodeURIComponent(state)}`)
+    expect(cb.headers.get('location')).toBe('/invites?invite=paid')
+    expect(t.net.balanceCents('u-dan')).toBe(500)
+    expect(t.net.balanceCents('u-alice')).toBe(500)
+    expect(await (await t.req('/invites')).text()).toContain('the ad credit is on your balance')
+  })
+
+  test('invite rules: new senders wait a day, old accounts cannot accept, same mailbox gets nothing', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    const alice = t.store.user('u-alice')!
+    await expect(t.rewards.createInvite(alice)).rejects.toThrow('hours old')
+    t.age('u-alice', 3)
+    const inv = await t.rewards.createInvite(t.store.user('u-alice')!)
+    await t.signIn('u-old')
+    t.age('u-old', 30)
+    expect(await t.rewards.acceptInvite(t.store.user('u-old')!, inv.code)).toEqual({ ok: false, reason: 'too_old' })
+    expect((await t.rewards.affiliates.invites('u-alice'))[0]!.usedBy).toBeNull()
+    // the same mailbox as the inviter, spelled with a +tag
+    await t.signIn('u-alias')
+    t.store.db.query("UPDATE users SET email = 'u-alice+x@example.com' WHERE sub = 'u-alias'").run()
+    const r = await t.rewards.acceptInvite(t.store.user('u-alias')!, inv.code)
+    expect(r).toEqual({ ok: true, paid: false, reason: 'same_mailbox', bonusCents: 0 })
+    expect(t.net.balanceCents('u-alias')).toBe(0)
+  })
+
+  test('the API, CLI and MCP surfaces redeem and invite', async () => {
+    const t = setup({ freeAds: false })
+    await t.signIn('u-alice')
+    t.age('u-alice', 3)
+    const key = /<code>(an_[A-Za-z0-9_-]+)<\/code>/.exec(await (await t.req('/me/key', { method: 'POST', form: { csrf: await t.csrf('/me') } })).text())![1]!
+    const auth = { authorization: `Bearer ${key}`, 'content-type': 'application/json' }
+    const { code } = await t.rewards.credits.mint({ grant: { unit: 'usd_cents', amount: 250 } })
+    const r = await t.req('/api/v1/credits/redeem', { method: 'POST', headers: auth, body: JSON.stringify({ code }) })
+    expect(await r.json()).toMatchObject({ ok: true, credit_usd: 2.5, balance_usd: 2.5, spend_only: true })
+    const inv = await t.req('/api/v1/invites', { method: 'POST', headers: auth, body: JSON.stringify({ note: 'x' }) })
+    expect(inv.status).toBe(201)
+    expect((await inv.json()).link).toMatch(/^https:\/\/ad\.network\.pit\.world\/i\/INV-/)
+    const list = await (await t.req('/api/v1/invites', { headers: auth })).json()
+    expect(list.quota).toEqual({ total: 3, used: 1, left: 2 })
   })
 })

@@ -137,6 +137,7 @@ export function helpPage(ctx: Ctx): string {
   <li>Add a wallet for USDC (Polygon, Solana, Base or Ethereum).</li>
   <li>You earn about 5¢ of every ${usd(CLICK_CENTS)} paid click on your site. Withdraw any time you have ${usd(MIN_PAYOUT_CENTS)} or more; it goes straight from crawlproof to your wallet.</li>
 </ol><p class="muted small">Someone else claimed your site? If they never placed their tag, add <code>&lt;meta name="ad.network" content="your code"&gt;</code> (the code is shown when you try) and claim it again.</p></div>
+<div class="card" id="credit"><h2>Credit codes and invites</h2><p>A credit code adds ad credit to your balance (<a href="/me#redeem">redeem it</a>). Each account has three invites; when someone new joins with yours, you both get ad credit. Ad credit runs your ads like budget you paid for, but it is not money: it cannot be withdrawn or refunded, and clicks bought with it pay publishers nothing.</p></div>
 <div class="card"><h2>Fees</h2><p>ad.network adds none. crawlproof keeps 30% of the publisher side of each click; the network fee for sending crypto is the sender's, as always.</p></div>
 <div class="card" id="agents"><h2>Agents: API, CLI, MCP</h2>
 <p>Make a key on <a href="/me">your page</a>, then:</p>
@@ -153,6 +154,10 @@ POST   /api/v1/sites/:site/check          look for the tag now
 PATCH  /api/v1/sites/:site                {"wallet": "0x…", "coin": "usdc_pol"}
 POST   /api/v1/sites/:site/withdraw
 DELETE /api/v1/sites/:site
+POST   /api/v1/credits/redeem             {"code": "AD-…"} -> ad credit (spend-only)
+GET    /api/v1/invites                    your invites, 3 each
+POST   /api/v1/invites                    {"note": "for Sam"} -> an invite link
+POST   /api/v1/invites/accept             {"code": "INV-…"} (new accounts)
 
 -H 'authorization: Bearer an_…'</pre>
 <pre>curl -fsSL ${SITE}/install.sh | sh          installs the adnetwork CLI (needs bun)
@@ -318,7 +323,14 @@ ${s.verifiedAt ? `<p class="ok small">Seen on https://${esc(s.host)}/ ${esc(when
   })
 }
 
-export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?: string; flash?: string }): string {
+/** "Have a code?": redeem a credit code for ad credit. */
+function redeemCard(ctx: Ctx, code = ''): string {
+  return `<form method="post" action="/me/redeem" class="card" id="redeem">${csrfField(ctx)}<h2>Have a code?</h2>
+<p class="muted small">A credit code adds ad credit to your balance. Ad credit runs your ads like budget you paid for; it cannot be withdrawn.</p>
+<div class="row"><input name="code" required placeholder="AD-XXXX-XXXX-XXXX-XXXX" value="${esc(code)}" autocomplete="off" spellcheck="false" aria-label="Credit code"><button class="btn">Redeem</button></div></form>`
+}
+
+export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?: string; flash?: string; error?: string }): string {
   const u = o.user
   return layout({
     ctx,
@@ -328,8 +340,10 @@ export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?:
     description: 'Your ad.network account.',
     path: '/me',
     body: `<section class="hero" style="padding-bottom:1rem"><h1>Hi${u.name ? `, ${esc(u.name.split(' ')[0])}` : ''}.</h1><p class="tag">Signed in with CoinPay as ${esc(u.email || u.name)}.</p></section>
-${flashNote(o.flash)}
+${flashNote(o.flash)}${flashNote(o.error, true)}
 <div class="grid2"><a class="card pick" href="/advertise"><h2>Advertise</h2><p class="muted">Balance ${usd(Math.max(0, o.balanceCents))}</p></a><a class="card pick" href="/publish"><h2>Publish</h2><p class="muted">Your sites and earnings</p></a></div>
+${redeemCard(ctx)}
+<div class="card"><h2>Invites</h2><p class="muted small">Hand out up to three invites. When someone new joins with one, you both get ad credit. <a href="/invites">Your invites</a></p></div>
 <div class="card"><h2>API key</h2>${o.apiKey ? `<p>Your key, shown once:</p><div class="address"><code>${esc(o.apiKey)}</code><button class="copy" type="button" data-copy="${esc(o.apiKey)}">Copy</button></div><p class="muted small">export ADNETWORK_KEY=${esc(o.apiKey)}</p>` : `<p class="muted small">For the API, the CLI and MCP. ${u.apiKeyHash ? 'You have one; making a new one replaces it.' : ''}</p>`}
 <form method="post" action="/me/key">${csrfField(ctx)}<button class="copy">${u.apiKeyHash ? 'Replace my key' : 'Make a key'}</button></form></div>
 <details class="card"><summary>Delete my account</summary><form method="post" action="/me/delete">${csrfField(ctx)}<button class="copy bad">Stop my ads and sites and delete everything ad.network keeps</button></form><p class="muted small">Withdraw your earnings first. Unspent ad budget is not refunded automatically: ask on <a href="${REPO}/issues">GitHub</a>.</p></details>`,
@@ -384,4 +398,47 @@ echo "Installed: adnetwork. Make a key at ${SITE}/me, then:"
 echo "  export ADNETWORK_KEY=an_..."
 echo "  adnetwork"
 `
+}
+
+export type InviteView = { id: string; note: string; createdAt: number; expiresAt: number | null; usedBy: string | null; usedAt: number | null; revokedAt?: number | null }
+
+/** /invites: your scarce invites, an invite code to accept, and a credit code to redeem. */
+export function invitesPage(
+  ctx: Ctx,
+  o: { quota: { total: number; used: number; left: number }; invites: InviteView[]; bonusCents: number; canInvite: string | null; myBonus: { paid: boolean; reason: string | null } | null; link?: string; flash?: string; error?: string; code?: string },
+): string {
+  const now = Date.now()
+  const state = (i: InviteView) => (i.usedBy ? `used ${when(i.usedAt ?? now)}` : i.revokedAt ? 'withdrawn' : i.expiresAt && i.expiresAt < now ? 'expired' : `open until ${when(i.expiresAt ?? now).slice(0, 10)}`)
+  return layout({
+    ctx,
+    noindex: true,
+    script: true,
+    title: 'Invites · ad.network',
+    description: 'Your ad.network invites and credit codes.',
+    path: '/invites',
+    body: `<section class="hero" style="padding-bottom:1rem"><h1>Invites</h1><p class="tag">Invites are scarce on purpose: ${o.quota.total} each, one use, 30 days. When someone new joins with yours, you both get <b>${usd(o.bonusCents)}</b> of ad credit.</p></section>
+${flashNote(o.flash)}${flashNote(o.error, true)}
+<div class="card"><h2>Your invites <span class="muted small">${o.quota.left} of ${o.quota.total} left</span></h2>
+${o.link ? `<p>Your new invite link, shown once:</p><div class="address"><code>${esc(o.link)}</code><button class="copy" type="button" data-copy="${esc(o.link)}">Copy</button></div>` : ''}
+${o.canInvite ? `<p class="muted small">${esc(o.canInvite)}</p>` : o.quota.left > 0 ? `<form method="post" action="/invites" class="row">${csrfField(ctx)}<input name="note" maxlength="80" placeholder="Who is it for? (optional)" aria-label="Note"><button class="btn">Make an invite</button></form>` : '<p class="muted small">No invites left.</p>'}
+${o.invites.length ? `<table><thead><tr><th>For</th><th>Made</th><th>Status</th></tr></thead><tbody>${o.invites.map((i) => `<tr><td>${esc(i.note || 'invite')}</td><td>${when(i.createdAt).slice(0, 10)}</td><td>${esc(state(i))}</td></tr>`).join('')}</tbody></table>` : '<p class="muted small">None yet.</p>'}</div>
+<div class="card"><h2>Have an invite code?</h2>${o.myBonus ? `<p class="muted small">You joined with an invite${o.myBonus.paid ? ' and the ad credit is on your balance.' : '.'}</p>` : `<p class="muted small">New accounts (under a week old) can accept one invite.</p><form method="post" action="/invites/accept" class="row">${csrfField(ctx)}<input name="code" required placeholder="INV-XXXX-XXXX-XXXX" value="${esc(o.code ?? '')}" autocomplete="off" spellcheck="false" aria-label="Invite code"><button class="btn">Accept</button></form>`}</div>
+${redeemCard(ctx)}`,
+  })
+}
+
+/** /i/<code>: someone sent you an invite. */
+export function inviteLandingPage(ctx: Ctx, o: { code: string | null; bonusCents: number }): string {
+  return layout({
+    ctx,
+    noindex: true,
+    title: "You're invited · ad.network",
+    description: 'Someone invited you to ad.network: run ads, or earn from your site, in crypto.',
+    path: '/',
+    body: o.code
+      ? `<section class="hero"><h1>You're invited</h1><p class="tag">Someone on ad.network wants you in. Sign in with CoinPay and you both get <b>${usd(o.bonusCents)}</b> of ad credit to run your first ads.</p>
+<p><a class="btn big" href="${ctx.user ? `/invites?code=${encodeURIComponent(o.code)}` : '/auth/start?next=/invites'}">${ctx.user ? 'Accept on my account' : 'Sign in with CoinPay'}</a></p>
+<p class="muted small">Invite <code>${esc(o.code)}</code>. For new accounts, one per account. On another device? Paste the code at <a href="/invites">/invites</a>.</p></section>`
+      : `<section class="hero"><h1>Not an invite</h1><p class="tag">That invite link is not right. Ask for a fresh one.</p><a class="btn" href="/">Home</a></section>`,
+  })
 }

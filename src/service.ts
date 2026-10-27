@@ -71,6 +71,7 @@ export const PAYOUT_COINS = ['usdc_pol', 'usdc_sol', 'usdc_base', 'usdc_eth'] as
 
 export function coinName(id: string): string {
   if (id === CHECKOUT_COIN) return 'Any coin or PayPal'
+  if (id === 'credit') return 'Ad credit (code or invite)'
   return COINS.find((c) => c.id === id)?.name ?? id.toUpperCase()
 }
 
