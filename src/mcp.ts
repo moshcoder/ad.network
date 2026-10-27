@@ -49,6 +49,9 @@ export function createMcpServer(client = new AdNetworkClient()): McpServer {
     { site, wallet: z.string().min(20), coin: z.enum(['usdc_pol', 'usdc_sol', 'usdc_base', 'usdc_eth']).default('usdc_pol') },
     wrap(({ site, wallet, coin }) => client.setWallet(site, wallet, coin)),
   )
+  server.tool('redeem_credit_code', 'Redeem an ad.network credit code: adds ad credit to your balance (runs ads, cannot be withdrawn).', { code: z.string().min(6).max(64) }, wrap(({ code }) => client.redeem(code)))
+  server.tool('list_invites', 'Your invites: how many are left (3 each) and which were used.', {}, wrap(() => client.invites()))
+  server.tool('create_invite', 'Make an invite link to hand to one new person; when they join, you both get ad credit.', { note: z.string().max(80).optional() }, wrap(({ note }) => client.createInvite(note)))
   server.tool('withdraw', "Send a site's earnings to its wallet (minimum $5).", { site }, wrap(({ site }) => client.withdraw(site)))
   return server
 }

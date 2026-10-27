@@ -73,6 +73,9 @@ export type SlotMoney = {
   min_payout_cents: number
 }
 
+/** A spend-only ad credit grant (POST /api/ads/v1/grants). */
+export type Grant = { reference: string; applied: boolean; credits: number; amount_usd: number; ad_bonus_credits: number; spend_only: boolean }
+
 export class CrawlproofError extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
@@ -120,6 +123,15 @@ export class Crawlproof {
 
   deposit(input: { amount_usd: number; currency: string; reference?: string } | DepositSessionRequest): Promise<Deposit> {
     return this.call('POST', '/api/ads/v1/deposits', input)
+  }
+
+  /**
+   * Spend-only ad credit on our advertiser account (crawlproof ad_bonus_credits):
+   * runs ads like a deposit, never pays a publisher, never withdrawable.
+   * Idempotent on `reference`: a repeat answers applied:false and grants nothing.
+   */
+  grant(input: { amount_usd: number; reference: string }): Promise<Grant> {
+    return this.call('POST', '/api/ads/v1/grants', input)
   }
 
   depositStatus(paymentId: string): Promise<Deposit> {

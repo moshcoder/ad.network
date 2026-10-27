@@ -11,7 +11,8 @@ import QRCode from 'qrcode'
 import { authorizeUrl, exchangeCode, pkce } from '@profullstack/coinpay-onboard/oauth'
 import { CoinPay } from '@profullstack/coinpay-onboard'
 import { Sealer, Store, type Campaign, type DepositRow, type Site, type User } from './db.js'
-import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, mePage, messagePage, pitchPage, publishPage, sitePage, SITE, type Ctx } from './html.js'
+import { adPage, advertisePage, depositPage, helpPage, homePage, installScript, inviteLandingPage, invitesPage, mePage, messagePage, pitchPage, publishPage, sitePage, SITE, type Ctx } from './html.js'
+import { ACCEPT_MESSAGES, Rewards, type RewardsConfig } from './rewards.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
 import { ringDescriptor, ringFooterScriptHashes, startRingFooterRefresh } from './ring-footer.js'
@@ -22,6 +23,8 @@ export { VERSION }
 
 const SELF = 'ad.network.pit.world'
 const SESSION = 'an_session'
+/** The invite a visitor arrived with (/i/<code>), accepted at their CoinPay sign-in. */
+const INVITE = 'an_invite'
 const SCOPES = ['openid', 'profile', 'email', 'wallet:read']
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -35,7 +38,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'cross-origin-opener-policy': 'same-origin',
 }
 
-export type Deps = { store: Store; config: Config; origin?: string; publicDir?: string; secureCookies?: boolean }
+export type Deps = { store: Store; config: Config; origin?: string; publicDir?: string; secureCookies?: boolean; rewards?: RewardsConfig }
 
 type Env = { Bindings: { ip?: string } }
 
@@ -70,6 +73,7 @@ export function createApp(deps: Deps) {
   const { store, config } = deps
   const ORIGIN = deps.origin ?? SITE
   const net = new AdNetwork(store, { origin: ORIGIN, ...config })
+  const rewards = new Rewards(store, net, deps.rewards ?? {})
   const app = new Hono<Env>()
   const writeLimit = new Limiter(30, 10 * 60_000)
   const authLimit = new Limiter(30, 10 * 60_000)
@@ -148,6 +152,13 @@ export function createApp(deps: Deps) {
       const user = store.upsertUser(me.sub, me.name ?? '', me.email ?? '', tokens)
       const sid = store.newSession(user.sub)
       setCookie(c, SESSION, sid, { httpOnly: true, secure: deps.secureCookies ?? true, sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
+      // Came through an invite link: accept it now. Never blocks the sign-in.
+      const invite = getCookie(c, INVITE)
+      if (invite) {
+        deleteCookie(c, INVITE, { path: '/' })
+        const r = await rewards.acceptInvite(user, invite).catch(() => ({ ok: false as const, reason: 'error' }))
+        return c.redirect(`/invites?invite=${encodeURIComponent(r.ok ? (r.paid ? 'paid' : 'accepted') : r.reason)}`)
+      }
       return c.redirect(`/${state.split('.')[1] ?? 'me'}`)
     } catch (e) {
       return page(c, messagePage(ctx, { title: 'Sign-in failed', message: e instanceof Error ? e.message : 'CoinPay did not answer.' }), 502)
@@ -162,7 +173,7 @@ export function createApp(deps: Deps) {
   })
 
   /** Signed-in pages: the user, or a redirect to sign in that comes back here. */
-  const LANDING: Record<string, string> = { advertise: 'advertise', ads: 'advertise', deposits: 'advertise', publish: 'publish', sites: 'publish' }
+  const LANDING: Record<string, string> = { advertise: 'advertise', ads: 'advertise', deposits: 'advertise', publish: 'publish', sites: 'publish', invites: 'invites' }
   const need = (c: Context): User | Response => userOf(c) ?? c.redirect(`/auth/start?next=/${LANDING[c.req.path.split('/')[1] ?? ''] ?? 'me'}`)
   const formOf = async (c: Context) => (await c.req.parseBody()) as Record<string, string>
 
@@ -362,6 +373,94 @@ export function createApp(deps: Deps) {
     return c.redirect('/')
   })
 
+  // ---- credit codes + invites ----------------------------------------------------------
+
+  app.post('/me/redeem', async (c) => {
+    const user = need(c)
+    if (user instanceof Response) return user
+    const form = await formOf(c)
+    const view = (extra: { flash?: string; error?: string }, status = 200) => page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), ...extra }), status as 200)
+    if (!csrfOk(c, form.csrf)) return view({ error: 'That form went stale. Try again.' }, 400)
+    if (!writeLimit.allow(`w:${user.sub}`)) return view({ error: 'Too many changes. Wait a few minutes.' }, 429)
+    try {
+      const r = await rewards.redeem(user, form.code ?? '')
+      return view({ flash: `Code redeemed: ${(r.cents / 100).toFixed(2)} USD of ad credit added.` })
+    } catch (e) {
+      return view({ error: message(e) }, statusOf(e))
+    }
+  })
+
+  const INVITE_NOTES: Record<string, string> = {
+    paid: 'Invite accepted: you both got ad credit.',
+    accepted: 'Invite accepted. This sign-up does not qualify for the bonus.',
+    error: 'We could not finish that invite. Try again from this page.',
+    ...ACCEPT_MESSAGES,
+  }
+  const invitesView = async (c: Context, user: User, extra: { flash?: string; error?: string; link?: string; code?: string } = {}, status = 200) => {
+    await rewards.repairInvite(user.sub).catch(() => {})
+    const check = rewards.canInvite(user)
+    return page(
+      c,
+      invitesPage(ctxOf(c), {
+        quota: await rewards.affiliates.quota(user.sub),
+        invites: await rewards.affiliates.invites(user.sub),
+        bonusCents: rewards.inviteBonusCents,
+        canInvite: 'error' in check ? check.error : null,
+        myBonus: rewards.myBonus(user.sub),
+        ...extra,
+      }),
+      status,
+    )
+  }
+
+  app.get('/invites', async (c) => {
+    const user = need(c)
+    if (user instanceof Response) return user
+    const note = c.req.query('invite')
+    const ok = note === 'paid' || note === 'accepted'
+    return invitesView(c, user, {
+      ...(note && INVITE_NOTES[note] ? (ok ? { flash: INVITE_NOTES[note] } : { error: INVITE_NOTES[note] }) : {}),
+      ...(c.req.query('code') ? { code: String(c.req.query('code')).slice(0, 40) } : {}),
+    })
+  })
+
+  app.post('/invites', async (c) => {
+    const user = need(c)
+    if (user instanceof Response) return user
+    const form = await formOf(c)
+    if (!csrfOk(c, form.csrf)) return invitesView(c, user, { error: 'That form went stale. Try again.' }, 400)
+    if (!writeLimit.allow(`w:${user.sub}`)) return invitesView(c, user, { error: 'Too many changes. Wait a few minutes.' }, 429)
+    try {
+      const inv = await rewards.createInvite(user, form.note ?? '')
+      return invitesView(c, user, { link: `${ORIGIN}/i/${inv.code}` })
+    } catch (e) {
+      return invitesView(c, user, { error: message(e) }, statusOf(e))
+    }
+  })
+
+  app.post('/invites/accept', async (c) => {
+    const user = need(c)
+    if (user instanceof Response) return user
+    const form = await formOf(c)
+    if (!csrfOk(c, form.csrf)) return invitesView(c, user, { error: 'That form went stale. Try again.' }, 400)
+    if (!writeLimit.allow(`w:${user.sub}`)) return invitesView(c, user, { error: 'Too many changes. Wait a few minutes.' }, 429)
+    try {
+      const r = await rewards.acceptInvite(user, form.code ?? '')
+      if (!r.ok) return invitesView(c, user, { error: INVITE_NOTES[r.reason] ?? 'That invite did not work.' }, 400)
+      return invitesView(c, user, { flash: INVITE_NOTES[r.paid ? 'paid' : 'accepted']! })
+    } catch (e) {
+      return invitesView(c, user, { error: message(e) }, statusOf(e))
+    }
+  })
+
+  // /i/<code>: remember the invite for the CoinPay sign-in that follows (30 days).
+  app.get('/i/:code', (c) => {
+    const raw = c.req.param('code')
+    const code = /^[A-Za-z0-9-]{6,40}$/.test(raw) ? raw.toUpperCase() : null
+    if (code) setCookie(c, INVITE, code, { httpOnly: true, secure: deps.secureCookies ?? true, sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
+    return page(c, inviteLandingPage(ctxOf(c), { code, bonusCents: rewards.inviteBonusCents }), code ? 200 : 404)
+  })
+
   // ---- the API -------------------------------------------------------------------------
 
   const param = (c: Context, name: string) => c.req.param(name) ?? ''
@@ -423,6 +522,41 @@ export function createApp(deps: Deps) {
     api((c, u) =>
       c.json({ name: u.name, email: u.email, balance_usd: Math.max(0, net.balanceCents(u.sub)) / 100, ads: store.campaigns(u.sub).map(adJson), deposits: store.deposits(u.sub).map(depositJson), sites: store.sites(u.sub).map(siteJson) }),
     ),
+  )
+  app.post(
+    '/api/v1/credits/redeem',
+    api(async (c, u) => {
+      const r = await rewards.redeem(u, String((await body(c)).code ?? ''))
+      return c.json({ ok: true, credit_usd: r.cents / 100, balance_usd: Math.max(0, net.balanceCents(u.sub)) / 100, spend_only: true })
+    }),
+  )
+  app.get(
+    '/api/v1/invites',
+    api(async (c, u) => {
+      const check = rewards.canInvite(u)
+      return c.json({
+        quota: await rewards.affiliates.quota(u.sub),
+        bonus_usd: rewards.inviteBonusCents / 100,
+        can_invite: check.ok,
+        ...('error' in check ? { why_not: check.error } : {}),
+        invites: (await rewards.affiliates.invites(u.sub)).map((i) => ({ id: i.id, note: i.note, created_at: new Date(i.createdAt).toISOString(), expires_at: i.expiresAt ? new Date(i.expiresAt).toISOString() : null, used: Boolean(i.usedBy) })),
+      })
+    }),
+  )
+  app.post(
+    '/api/v1/invites',
+    api(async (c, u) => {
+      const inv = await rewards.createInvite(u, String((await body(c)).note ?? ''))
+      return c.json({ code: inv.code, link: `${ORIGIN}/i/${inv.code}`, expires_at: inv.expiresAt ? new Date(inv.expiresAt).toISOString() : null, left: inv.left }, 201)
+    }),
+  )
+  app.post(
+    '/api/v1/invites/accept',
+    api(async (c, u) => {
+      const r = await rewards.acceptInvite(u, String((await body(c)).code ?? ''))
+      if (!r.ok) return c.json({ error: ACCEPT_MESSAGES[r.reason] ?? 'that invite did not work', reason: r.reason }, 400)
+      return c.json({ ok: true, bonus_usd: r.bonusCents / 100, ...(r.reason ? { no_bonus: r.reason } : {}) })
+    }),
   )
   app.get('/api/v1/ads', api((c, u) => c.json({ ads: store.campaigns(u.sub).map(adJson) })))
   app.post(
@@ -502,7 +636,7 @@ export function createApp(deps: Deps) {
     console.error(error instanceof Error ? error.message : error)
     return c.req.path.startsWith('/api/') ? c.json({ error: 'Something went wrong.' }, 500) : page(c, messagePage(ctxOf(c), { title: 'Something went wrong', message: 'Try again in a moment.' }), 500)
   })
-  return { app, net }
+  return { app, net, rewards }
 }
 
 export function serve(options: { port?: number; hostname?: string } = {}) {
@@ -525,6 +659,10 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       publisherToken: env.ADNETWORK_PUBLISHER_TOKEN!,
       houseSubs: (env.ADNETWORK_HOUSE_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
       freeAds: (env.ADNETWORK_FREE_ADS ?? '1') !== '0',
+    },
+    rewards: {
+      ...(env.ADNETWORK_INVITE_BONUS_CENTS ? { inviteBonusCents: Number(env.ADNETWORK_INVITE_BONUS_CENTS) } : {}),
+      ...(env.ADNETWORK_INVITE_MONTHLY_CAP ? { inviteMonthlyCap: Number(env.ADNETWORK_INVITE_MONTHLY_CAP) } : {}),
     },
   })
   const trustProxy = (env.ADNETWORK_TRUST_PROXY ?? '1') === '1'

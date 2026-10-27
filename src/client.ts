@@ -78,6 +78,19 @@ export class AdNetworkClient {
   withdraw(site: string): Promise<{ amount_usd: number; status: string }> {
     return this.call('POST', `/api/v1/sites/${encodeURIComponent(site)}/withdraw`)
   }
+  /** Redeem a credit code: ad credit on your balance (spend-only, not withdrawable). */
+  redeem(code: string): Promise<{ ok: boolean; credit_usd: number; balance_usd: number }> {
+    return this.call('POST', '/api/v1/credits/redeem', { code })
+  }
+  invites(): Promise<{ quota: { total: number; used: number; left: number }; bonus_usd: number; can_invite: boolean; why_not?: string; invites: { id: string; note: string; created_at: string; expires_at: string | null; used: boolean }[] }> {
+    return this.call('GET', '/api/v1/invites')
+  }
+  createInvite(note?: string): Promise<{ code: string; link: string; expires_at: string | null; left: number }> {
+    return this.call('POST', '/api/v1/invites', note ? { note } : {})
+  }
+  acceptInvite(code: string): Promise<{ ok: boolean; bonus_usd: number; no_bonus?: string }> {
+    return this.call('POST', '/api/v1/invites/accept', { code })
+  }
   removeSite(site: string): Promise<{ ok: boolean }> {
     return this.call('DELETE', `/api/v1/sites/${encodeURIComponent(site)}`)
   }
