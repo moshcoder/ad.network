@@ -6,6 +6,8 @@
 export type ApiAd = { ref: string; name: string; url: string; daily_usd: number; running: boolean; wanted: string; status: string; headline: string; body: string; views: number; clicks: number; spent_usd: number; page: string }
 export type ApiDeposit = { id: string; amount_usd: number; coin: string; address: string; amount_crypto: string; checkout_url: string | null; status: string; expires_at: string | null; page: string }
 export type ApiSite = { site: string; tag: string; live: boolean; wallet: string | null; coin: string; earned_usd: number; withdrawable_usd: number; page: string }
+export type ApiWebhook = { id: string; url: string; events: string[]; description: string; enabled: boolean; failures: number; disabled_reason: string | null; created_at: string }
+export type ApiDelivery = { id: string; endpoint_id: string; event_type: string; status: string; attempts: number; last_status: number | null; last_error: string | null; created_at: string }
 export type ApiMe = { name: string; email: string; balance_usd: number; ads: ApiAd[]; deposits: ApiDeposit[]; sites: ApiSite[] }
 
 export class ApiError extends Error {
@@ -90,6 +92,25 @@ export class AdNetworkClient {
   }
   acceptInvite(code: string): Promise<{ ok: boolean; bonus_usd: number; no_bonus?: string }> {
     return this.call('POST', '/api/v1/invites/accept', { code })
+  }
+  /** Your webhook endpoints, and the events ad.network sends. */
+  webhooks(): Promise<{ endpoints: ApiWebhook[]; event_types: string[] }> {
+    return this.call('GET', '/api/v1/webhooks')
+  }
+  addWebhook(url: string, events?: string[], description = ''): Promise<{ endpoint: ApiWebhook; secret: string }> {
+    return this.call('POST', '/api/v1/webhooks', { url, ...(events?.length ? { events } : {}), description })
+  }
+  removeWebhook(id: string): Promise<{ deleted: true }> {
+    return this.call('DELETE', `/api/v1/webhooks/${encodeURIComponent(id)}`)
+  }
+  testWebhook(id: string): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+    return this.call('POST', `/api/v1/webhooks/${encodeURIComponent(id)}/test`)
+  }
+  rotateWebhook(id: string): Promise<{ secret: string }> {
+    return this.call('POST', `/api/v1/webhooks/${encodeURIComponent(id)}/rotate`)
+  }
+  webhookLog(id?: string): Promise<{ deliveries: ApiDelivery[] }> {
+    return this.call('GET', id ? `/api/v1/webhooks/${encodeURIComponent(id)}/deliveries` : '/api/v1/webhooks/deliveries')
   }
   removeSite(site: string): Promise<{ ok: boolean }> {
     return this.call('DELETE', `/api/v1/sites/${encodeURIComponent(site)}`)

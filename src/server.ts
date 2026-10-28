@@ -18,6 +18,7 @@ import { RING_PLACEHOLDER, ringBar, startRingRefresh } from './ring.js'
 import { ringDescriptor, ringFooterScriptHashes, startRingFooterRefresh } from './ring-footer.js'
 import { AdNetwork, newApiKey, UserError, type Config } from './service.js'
 import { VERSION } from './version.js'
+import { webhooksApi } from '@profullstack/webhooks'
 
 export { VERSION }
 
@@ -351,23 +352,52 @@ export function createApp(deps: Deps) {
 
   // ---- me ---------------------------------------------------------------------------
 
-  app.get('/me', (c) => {
+  app.get('/me', async (c) => {
     const user = need(c)
-    return user instanceof Response ? user : page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub) }))
+    return user instanceof Response ? user : page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), webhooks: await net.hooks.listEndpoints(user.sub) }))
+  })
+
+  // Webhooks from the account page: add, test, rotate, delete. The API below does the same with a key.
+  app.post('/me/webhooks/:action{(add|test|rotate|delete)}', async (c) => {
+    const user = need(c)
+    if (user instanceof Response) return user
+    const form = await formOf(c)
+    const show = async (data: { flash?: string; error?: string; webhookSecret?: string }, status = 200) =>
+      page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), webhooks: await net.hooks.listEndpoints(user.sub), ...data }), status)
+    if (!csrfOk(c, form.csrf)) return show({ error: 'That form went stale. Try again.' }, 400)
+    if (!writeLimit.allow(`w:${user.sub}`)) return show({ error: 'Too many changes. Wait a few minutes.' }, 429)
+    try {
+      const action = c.req.param('action')
+      if (action === 'add') {
+        const r = await net.hooks.createEndpoint(user.sub, { url: form.url ?? '', events: form.events || undefined, description: form.description ?? '' })
+        return show({ flash: 'Webhook added. Its signing secret is below; copy it now.', webhookSecret: r.secret })
+      }
+      const id = form.id ?? ''
+      if (action === 'test') {
+        const r = await net.hooks.test(user.sub, id)
+        return r.ok ? show({ flash: `Test delivered (HTTP ${r.status}).` }) : show({ error: `Test failed: ${r.error ?? `HTTP ${r.status}`}` })
+      }
+      if (action === 'rotate') return show({ flash: 'New signing secret below; the old one has stopped working.', webhookSecret: (await net.hooks.rotateSecret(user.sub, id)).secret })
+      await net.hooks.deleteEndpoint(user.sub, id)
+      return show({ flash: 'Webhook removed.' })
+    } catch (e) {
+      return show({ error: message(e) }, e instanceof UserError ? e.status : ((e as { status?: number })?.status ?? 400))
+    }
   })
 
   app.post('/me/:action{(key|delete)}', async (c) => {
     const user = need(c)
     if (user instanceof Response) return user
     const form = await formOf(c)
-    if (!csrfOk(c, form.csrf)) return page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), flash: 'That form went stale. Try again.' }), 400)
+    if (!csrfOk(c, form.csrf)) return page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), webhooks: await net.hooks.listEndpoints(user.sub), flash: 'That form went stale. Try again.' }), 400)
     if (c.req.param('action') === 'key') {
       const key = newApiKey()
       store.setApiKey(user.sub, key)
-      return page(c, mePage(ctxOf(c), { user: store.user(user.sub)!, balanceCents: net.balanceCents(user.sub), apiKey: key }))
+      return page(c, mePage(ctxOf(c), { user: store.user(user.sub)!, balanceCents: net.balanceCents(user.sub), webhooks: await net.hooks.listEndpoints(user.sub), apiKey: key }))
     }
     for (const ad of store.campaigns(user.sub)) await net.ads.updateCampaign(ad.id, { status: 'paused' }).catch(() => {})
     for (const s of store.sites(user.sub)) await net.pubs.updateSlot(s.slotId, { status: 'paused' }).catch(() => {})
+    for (const w of await net.hooks.listEndpoints(user.sub)) await net.hooks.deleteEndpoint(user.sub, w.id).catch(() => {})
     store.deleteUser(user.sub)
     deleteCookie(c, SESSION, { path: '/' })
     return c.redirect('/')
@@ -379,7 +409,7 @@ export function createApp(deps: Deps) {
     const user = need(c)
     if (user instanceof Response) return user
     const form = await formOf(c)
-    const view = (extra: { flash?: string; error?: string }, status = 200) => page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), ...extra }), status as 200)
+    const view = async (extra: { flash?: string; error?: string }, status = 200) => page(c, mePage(ctxOf(c), { user, balanceCents: net.balanceCents(user.sub), webhooks: await net.hooks.listEndpoints(user.sub), ...extra }), status as 200)
     if (!csrfOk(c, form.csrf)) return view({ error: 'That form went stale. Try again.' }, 400)
     if (!writeLimit.allow(`w:${user.sub}`)) return view({ error: 'Too many changes. Wait a few minutes.' }, 429)
     try {
@@ -516,6 +546,16 @@ export function createApp(deps: Deps) {
     if (!s || s.sub !== user.sub) throw new UserError('no such site', undefined, 404)
     return s
   }
+
+  // Customer webhooks: the @profullstack/webhooks API, scoped to the key's account.
+  const hookOwner = new WeakMap<Request, string>()
+  const hooksApi = webhooksApi(net.hooks, { basePath: '/api/v1/webhooks', owner: (req) => hookOwner.get(req) })
+  const webhooksRoute = api(async (c, u) => {
+    hookOwner.set(c.req.raw, u.sub)
+    return (await hooksApi(c.req.raw)) ?? c.json({ error: 'not found' }, 404)
+  })
+  app.all('/api/v1/webhooks', webhooksRoute)
+  app.all('/api/v1/webhooks/*', webhooksRoute)
 
   app.get(
     '/api/v1/me',
@@ -670,6 +710,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   startPitFooterRefresh('ad.network.pit.world')
   startRingFooterRefresh()
   net.startSweep()
+  net.hooks.start()
   return Bun.serve({
     port: options.port ?? Number(env.PORT ?? 8800),
     hostname: options.hostname ?? env.HOST ?? '127.0.0.1',

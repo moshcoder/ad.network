@@ -52,6 +52,17 @@ export function createMcpServer(client = new AdNetworkClient()): McpServer {
   server.tool('redeem_credit_code', 'Redeem an ad.network credit code: adds ad credit to your balance (runs ads, cannot be withdrawn).', { code: z.string().min(6).max(64) }, wrap(({ code }) => client.redeem(code)))
   server.tool('list_invites', 'Your invites: how many are left (3 each) and which were used.', {}, wrap(() => client.invites()))
   server.tool('create_invite', 'Make an invite link to hand to one new person; when they join, you both get ad credit.', { note: z.string().max(80).optional() }, wrap(({ note }) => client.createInvite(note)))
+  server.tool('list_webhooks', 'Your webhook endpoints and the event types ad.network sends.', {}, wrap(() => client.webhooks()))
+  server.tool(
+    'create_webhook',
+    'Have ad.network POST your ad, budget and site events (ad.created, ad.started, ad.paused, ad.deleted, budget.exhausted, deposit.completed, deposit.failed, credit.added, site.added, site.verified, site.lost, site.removed, payout.requested) to a URL, as signed CloudEvents (Standard Webhooks). Returns the signing secret, shown once. events: patterns like "ad.*"; omit for all.',
+    { url: z.string().url(), events: z.array(z.string()).optional(), description: z.string().max(200).optional() },
+    wrap(({ url, events, description }) => client.addWebhook(url, events, description ?? '')),
+  )
+  server.tool('test_webhook', 'Send a webhook.test event to an endpoint now.', { id: z.string() }, wrap(({ id }) => client.testWebhook(id)))
+  server.tool('rotate_webhook_secret', "Replace an endpoint's signing secret; the old one stops working.", { id: z.string() }, wrap(({ id }) => client.rotateWebhook(id)))
+  server.tool('delete_webhook', 'Remove a webhook endpoint.', { id: z.string() }, wrap(({ id }) => client.removeWebhook(id)))
+  server.tool('webhook_deliveries', 'Recent webhook deliveries, optionally for one endpoint.', { id: z.string().optional() }, wrap(({ id }) => client.webhookLog(id)))
   server.tool('withdraw', "Send a site's earnings to its wallet (minimum $5).", { site }, wrap(({ site }) => client.withdraw(site)))
   return server
 }
