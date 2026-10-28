@@ -174,7 +174,7 @@ adnetwork fund 25
 adnetwork site example.com
 claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre></div>
 <div class="card" id="webhooks"><h2>Webhooks</h2><p>Add a URL on <a href="/me#webhooks">your page</a> (or <code>adnetwork webhook add</code>, MCP <code>create_webhook</code>, <code>POST /api/v1/webhooks</code>) and ad.network POSTs what happens to your ads, budget and sites: ${WEBHOOK_EVENTS.map((e) => `<code>${esc(e)}</code>`).join(', ')}. Each is a CloudEvents JSON body signed per <a href="https://www.standardwebhooks.com/">Standard Webhooks</a> (verify with <code>@profullstack/webhooks</code> or any Standard Webhooks library), retried for about three days.</p></div>
-<div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, your sign-in (encrypted), which ads and sites are yours, and your deposits. Delete it all on <a href="/me">your page</a>.</p></div>
+<div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, the payout wallets CoinPay listed when you signed in (to prefill forms; never your CoinPay sign-in itself, which we do not store), which ads and sites are yours, and your deposits. Delete it all on <a href="/me">your page</a>.</p></div>
 <div class="card"><h2>Reaching ad.network</h2><p>It lives at <a href="${SITE}/">ad.network.pit.world</a>, part of the <a href="https://pit.world">Moshpit</a> network.</p></div>`,
   })
 }

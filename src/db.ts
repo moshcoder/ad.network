@@ -4,7 +4,13 @@
  * A person is their CoinPay account (`sub`). crawlproof holds the campaigns,
  * slots and money; we keep which of them are whose, the deposits each
  * advertiser made, and the last numbers we read, so a page never waits on
- * crawlproof to say who owns what. CoinPay tokens are sealed with ADNETWORK_KEY.
+ * crawlproof to say who owns what.
+ *
+ * No CoinPay token is kept (unlock-on-use fleet rule, 2026-10-28): the only
+ * use was suggesting the person's own payout wallets, so sign-in reads those
+ * addresses once with the fresh access token and drops it. `users.tokens` is
+ * the legacy copy under ADNETWORK_KEY: never read, NULLed on the next sign-in,
+ * counted by legacyTokenCount() until the cutoff.
  */
 import { Database } from 'bun:sqlite'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
@@ -155,6 +161,8 @@ export class Store {
       );
     `)
     // Added with hosted checkout sessions; older databases lack the column.
+    const userCols = new Set((this.db.query('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name))
+    if (!userCols.has('wallet_suggestions')) this.db.exec("ALTER TABLE users ADD COLUMN wallet_suggestions TEXT NOT NULL DEFAULT '[]'")
     const cols = (this.db.query('PRAGMA table_info(deposits)').all() as { name: string }[]).map((c) => c.name)
     if (!cols.includes('checkout_url')) this.db.exec("ALTER TABLE deposits ADD COLUMN checkout_url TEXT NOT NULL DEFAULT ''")
   }
@@ -165,13 +173,14 @@ export class Store {
     return row ? { sub: row.sub, name: row.name, email: row.email, apiKeyHash: row.api_key_hash, createdAt: row.created_at } : null
   }
 
-  upsertUser(sub: string, name: string, email: string, tokens: Tokens, now = Date.now()): User {
+  /** Creates or refreshes the account. A sign-in also drops any legacy token copy. */
+  upsertUser(sub: string, name: string, email: string, now = Date.now()): User {
     this.db
       .query(
-        `INSERT INTO users (sub, name, email, tokens, created_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(sub) DO UPDATE SET name = excluded.name, email = excluded.email, tokens = excluded.tokens`,
+        `INSERT INTO users (sub, name, email, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(sub) DO UPDATE SET name = excluded.name, email = excluded.email, tokens = NULL`,
       )
-      .run(sub, name, email, this.sealer.seal(JSON.stringify(tokens)), now)
+      .run(sub, name, email, now)
     return this.user(sub)!
   }
 
@@ -187,13 +196,23 @@ export class Store {
     this.db.query('UPDATE users SET api_key_hash = ? WHERE sub = ?').run(hashKey(key), sub)
   }
 
-  tokens(sub: string): Tokens | null {
-    const row: any = this.db.query('SELECT tokens FROM users WHERE sub = ?').get(sub)
-    return row?.tokens ? JSON.parse(this.sealer.open(row.tokens)) : null
+  /** Payout wallets read from CoinPay at sign-in (public addresses, not credentials). */
+  walletSuggestions(sub: string): { coin: string; address: string }[] {
+    const row: any = this.db.query('SELECT wallet_suggestions FROM users WHERE sub = ?').get(sub)
+    try {
+      return row?.wallet_suggestions ? JSON.parse(row.wallet_suggestions) : []
+    } catch {
+      return []
+    }
   }
 
-  saveTokens(sub: string, tokens: Tokens): void {
-    this.db.query('UPDATE users SET tokens = ? WHERE sub = ?').run(this.sealer.seal(JSON.stringify(tokens)), sub)
+  setWalletSuggestions(sub: string, list: { coin: string; address: string }[]): void {
+    this.db.query('UPDATE users SET wallet_suggestions = ? WHERE sub = ?').run(JSON.stringify(list), sub)
+  }
+
+  /** Accounts still holding a legacy ADNETWORK_KEY token copy (cleared at their next sign-in). */
+  legacyTokenCount(): number {
+    return (this.db.query('SELECT COUNT(*) AS n FROM users WHERE tokens IS NOT NULL').get() as { n: number }).n
   }
 
   /** Forget a person. Their campaigns and slots stay on crawlproof; the caller stops them first. */

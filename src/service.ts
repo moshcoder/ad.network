@@ -18,7 +18,6 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { COINS, CoinPay } from '@profullstack/coinpay-onboard'
-import { refresh as refreshTokens } from '@profullstack/coinpay-onboard/oauth'
 import { Webhooks, sqliteStore as webhookStore, type GuardOptions } from '@profullstack/webhooks'
 import { Crawlproof, CrawlproofError } from './crawlproof.js'
 import type { Campaign, DepositRow, Site, Store, User } from './db.js'
@@ -184,7 +183,6 @@ export class AdNetwork {
   readonly pubs: Crawlproof
   /** Customer webhooks (@profullstack/webhooks): endpoints per account, durable delivery. */
   readonly hooks: Webhooks
-  private refreshing = new Map<string, Promise<CoinPay>>()
 
   constructor(
     readonly store: Store,
@@ -217,40 +215,28 @@ export class AdNetwork {
 
   // ---- CoinPay, as the person (only to suggest their own payout wallet) ----
 
-  clientFor(sub: string): Promise<CoinPay> {
-    const pending = this.refreshing.get(sub)
-    if (pending) return pending
-    const tokens = this.store.tokens(sub)
-    if (!tokens) return Promise.reject(new UserError('Sign in with CoinPay again.'))
-    const make = (token: string) => new CoinPay({ base: this.config.coinpayBase, token, ...(this.config.fetch ? { fetch: this.config.fetch } : {}) })
-    if (tokens.expiresAt - Date.now() > 60_000) return Promise.resolve(make(tokens.accessToken))
-    if (!tokens.refreshToken) return Promise.reject(new UserError('Your CoinPay sign-in has expired. Sign in again.'))
-    const job = refreshTokens({
-      refreshToken: tokens.refreshToken,
-      clientId: this.config.clientId,
-      ...(this.config.clientSecret ? { clientSecret: this.config.clientSecret } : {}),
-      base: this.config.coinpayBase,
-      ...(this.config.fetch ? { fetch: this.config.fetch } : {}),
-    })
-      .then((next) => {
-        this.store.saveTokens(sub, { accessToken: next.accessToken, refreshToken: next.refreshToken ?? tokens.refreshToken, expiresAt: next.expiresAt })
-        return make(next.accessToken)
-      })
-      .finally(() => this.refreshing.delete(sub))
-    this.refreshing.set(sub, job)
-    return job
+  /**
+   * Read their CoinPay payout wallets once, at sign-in, with the fresh access
+   * token, and keep only the addresses. The token is not stored anywhere.
+   */
+  async captureWalletSuggestions(sub: string, accessToken: string): Promise<void> {
+    try {
+      const client = new CoinPay({ base: this.config.coinpayBase, token: accessToken, ...(this.config.fetch ? { fetch: this.config.fetch } : {}) })
+      const wallets = await client.wallets('account')
+      this.store.setWalletSuggestions(
+        sub,
+        wallets
+          .map((w) => ({ coin: String(w.cryptocurrency ?? '').toLowerCase(), address: String(w.address ?? w.wallet_address ?? '') }))
+          .filter((w) => (PAYOUT_COINS as readonly string[]).includes(w.coin) && w.address),
+      )
+    } catch {
+      // A prefill only: never in the way of signing in.
+    }
   }
 
-  /** Their CoinPay payout wallets in coins crawlproof pays out in, to prefill the form. */
+  /** Their CoinPay payout wallets in coins crawlproof pays out in, to prefill the form (as of their last sign-in). */
   async walletSuggestions(sub: string): Promise<{ coin: string; address: string }[]> {
-    try {
-      const wallets = await (await this.clientFor(sub)).wallets('account')
-      return wallets
-        .map((w) => ({ coin: String(w.cryptocurrency ?? '').toLowerCase(), address: String(w.address ?? w.wallet_address ?? '') }))
-        .filter((w) => (PAYOUT_COINS as readonly string[]).includes(w.coin) && w.address)
-    } catch {
-      return []
-    }
+    return this.store.walletSuggestions(sub)
   }
 
   // ---- advertisers ----------------------------------------------------------

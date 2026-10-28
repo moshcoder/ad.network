@@ -181,6 +181,23 @@ describe('ad.network', () => {
     expect((await t.req(`/auth/callback?code=c1&state=${encodeURIComponent(loc.searchParams.get('state')!)}`)).status).toBe(400)
   })
 
+  test('no CoinPay token is stored: sign-in reads payout wallets once and drops the token; a legacy copy is cleared', async () => {
+    const t = setup()
+    // A row as the pre-2026-10-28 code left it.
+    t.store.upsertUser('u-alice', 'Alice', 'a@example.com')
+    t.store.db.query("UPDATE users SET tokens = 'legacy-sealed-blob'").run()
+    expect(t.store.legacyTokenCount()).toBe(1)
+    await t.signIn()
+    const rows = t.store.db.query('SELECT * FROM users').all() as Record<string, unknown>[]
+    for (const row of rows) expect(row.tokens).toBeNull()
+    const dump = JSON.stringify(rows)
+    expect(dump).not.toContain('"at"')
+    expect(dump).not.toContain('"rt"')
+    expect(t.store.legacyTokenCount()).toBe(0)
+    const sub = (rows.find((r) => r.wallet_suggestions !== '[]') ?? rows[0])!.sub as string
+    expect(t.store.walletSuggestions(sub)).toEqual([{ coin: 'usdc_pol', address: '0xAliceWallet000000000000000000000000000001' }])
+  })
+
   test('free launch: an ad runs with no balance, and the pages say it is free', async () => {
     const t = setup({ freeAds: true })
     expect(await (await t.req('/')).text()).toContain('Free while we launch')
@@ -403,8 +420,8 @@ describe('ad.network', () => {
   test('house accounts run every property: no cap on sites', async () => {
     const t = setup()
     const tokens = { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 3600_000 }
-    const alice = t.store.upsertUser('u-alice', 'Alice', 'a@x.test', tokens)
-    const house = t.store.upsertUser('u-house', 'House', 'h@x.test', tokens)
+    const alice = t.store.upsertUser('u-alice', 'Alice', 'a@x.test')
+    const house = t.store.upsertUser('u-house', 'House', 'h@x.test')
     for (let i = 0; i < 25; i++) {
       await t.net.addSite(alice, `a${i}.example.org`)
       await t.net.addSite(house, `h${i}.example.org`)
@@ -544,8 +561,8 @@ describe('customer webhooks', () => {
 
   test('the API is behind the key and scoped to its account', async () => {
     const t = setup(guard)
-    t.store.upsertUser('u-alice', 'Alice', 'a@example.com', { accessToken: 'a', refreshToken: null, expiresAt: 0 })
-    t.store.upsertUser('u-bob', 'Bob', 'b@example.com', { accessToken: 'a', refreshToken: null, expiresAt: 0 })
+    t.store.upsertUser('u-alice', 'Alice', 'a@example.com')
+    t.store.upsertUser('u-bob', 'Bob', 'b@example.com')
     t.store.setApiKey('u-alice', 'an_alice')
     t.store.setApiKey('u-bob', 'an_bob')
     const call = (key: string, method: string, path: string, body?: unknown) =>
