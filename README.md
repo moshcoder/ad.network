@@ -64,7 +64,7 @@ ADNETWORK_KEY=$(openssl rand -hex 32) ADNETWORK_COINPAY_CLIENT_ID=cp_… \
 ADNETWORK_ADVERTISER_TOKEN=crp_… ADNETWORK_PUBLISHER_TOKEN=crp_… bun src/server.ts
 ```
 
-Settings: `ADNETWORK_KEY` (seals CoinPay tokens, signs claim codes),
+Settings: `ADNETWORK_KEY` (seals sign-in state, signs claim codes; no CoinPay token is stored: sign-in reads your payout wallets once and drops it),
 `ADNETWORK_COINPAY_CLIENT_ID` / `_SECRET` (CoinPay OAuth client, scopes
 `openid profile email wallet:read`), `ADNETWORK_ADVERTISER_TOKEN` /
 `ADNETWORK_PUBLISHER_TOKEN` (crawlproof API tokens; the advertiser account must be

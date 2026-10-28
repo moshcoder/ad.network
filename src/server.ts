@@ -150,7 +150,9 @@ export function createApp(deps: Deps) {
     try {
       const tokens = await exchangeCode({ code, verifier: saved.verifier, clientId: config.clientId, ...(config.clientSecret ? { clientSecret: config.clientSecret } : {}), redirectUri: saved.redirectUri, base: config.coinpayBase, ...(config.fetch ? { fetch: config.fetch } : {}) })
       const me = await new CoinPay({ base: config.coinpayBase, token: tokens.accessToken, ...(config.fetch ? { fetch: config.fetch } : {}) }).userinfo()
-      const user = store.upsertUser(me.sub, me.name ?? '', me.email ?? '', tokens)
+      const user = store.upsertUser(me.sub, me.name ?? '', me.email ?? '')
+      // The token's only job: read their payout wallets now. It is then dropped, never stored.
+      await net.captureWalletSuggestions(me.sub, tokens.accessToken)
       const sid = store.newSession(user.sub)
       setCookie(c, SESSION, sid, { httpOnly: true, secure: deps.secureCookies ?? true, sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
       // Came through an invite link: accept it now. Never blocks the sign-in.
