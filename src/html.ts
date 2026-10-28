@@ -8,7 +8,8 @@ import type { Campaign, DepositRow, Site, User, Withdrawal } from './db.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter } from './ring-footer.js'
-import { CLICK_CENTS, coinName, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd } from './service.js'
+import type { PublicEndpoint } from '@profullstack/webhooks'
+import { CLICK_CENTS, coinName, MAX_DAILY_USD, MIN_DAILY_USD, MIN_DEPOSIT_USD, MIN_PAYOUT_CENTS, PAYOUT_COINS, usd, WEBHOOK_EVENTS } from './service.js'
 
 export const SITE = 'https://ad.network.pit.world'
 export const REPO = 'https://github.com/moshcoder/ad.network'
@@ -158,6 +159,12 @@ POST   /api/v1/credits/redeem             {"code": "AD-…"} -> ad credit (spend
 GET    /api/v1/invites                    your invites, 3 each
 POST   /api/v1/invites                    {"note": "for Sam"} -> an invite link
 POST   /api/v1/invites/accept             {"code": "INV-…"} (new accounts)
+GET    /api/v1/webhooks                   your webhook endpoints and the event types
+POST   /api/v1/webhooks                   {"url": "https://…", "events": ["ad.*", "deposit.completed"]} -> the signing secret
+POST   /api/v1/webhooks/:id/test          send webhook.test now
+POST   /api/v1/webhooks/:id/rotate        a new signing secret
+GET    /api/v1/webhooks/:id/deliveries    recent deliveries
+DELETE /api/v1/webhooks/:id
 
 -H 'authorization: Bearer an_…'</pre>
 <pre>curl -fsSL ${SITE}/install.sh | sh          installs the adnetwork CLI (needs bun)
@@ -166,6 +173,7 @@ adnetwork run https://example.com --daily 5
 adnetwork fund 25
 adnetwork site example.com
 claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp</pre></div>
+<div class="card" id="webhooks"><h2>Webhooks</h2><p>Add a URL on <a href="/me#webhooks">your page</a> (or <code>adnetwork webhook add</code>, MCP <code>create_webhook</code>, <code>POST /api/v1/webhooks</code>) and ad.network POSTs what happens to your ads, budget and sites: ${WEBHOOK_EVENTS.map((e) => `<code>${esc(e)}</code>`).join(', ')}. Each is a CloudEvents JSON body signed per <a href="https://www.standardwebhooks.com/">Standard Webhooks</a> (verify with <code>@profullstack/webhooks</code> or any Standard Webhooks library), retried for about three days.</p></div>
 <div class="card"><h2>Your data</h2><p>We keep your CoinPay name and email, your sign-in (encrypted), which ads and sites are yours, and your deposits. Delete it all on <a href="/me">your page</a>.</p></div>
 <div class="card"><h2>Reaching ad.network</h2><p>It lives at <a href="${SITE}/">ad.network.pit.world</a>, part of the <a href="https://pit.world">Moshpit</a> network.</p></div>`,
   })
@@ -330,7 +338,21 @@ function redeemCard(ctx: Ctx, code = ''): string {
 <div class="row"><input name="code" required placeholder="AD-XXXX-XXXX-XXXX-XXXX" value="${esc(code)}" autocomplete="off" spellcheck="false" aria-label="Credit code"><button class="btn">Redeem</button></div></form>`
 }
 
-export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?: string; flash?: string; error?: string }): string {
+function webhooksCard(ctx: Ctx, hooks: PublicEndpoint[], secret?: string): string {
+  return `<div class="card" id="webhooks"><h2>Webhooks</h2>
+<p class="muted small">ad.network POSTs what happens to your ads, budget and sites to your URL: ${WEBHOOK_EVENTS.map((e) => `<code>${esc(e)}</code>`).join(', ')}. CloudEvents JSON, signed per <a href="https://www.standardwebhooks.com/">Standard Webhooks</a>; retried for about three days.</p>
+${secret ? `<p>Signing secret, shown once:</p><div class="address"><code>${esc(secret)}</code><button class="copy" type="button" data-copy="${esc(secret)}">Copy</button></div>` : ''}
+${hooks
+  .map(
+    (w) => `<div class="row"><code>${esc(w.url)}</code><span class="muted small">${esc(w.events.join(', '))}${w.enabled ? '' : ` · off: ${esc(w.disabled_reason ?? 'disabled')}`}</span>
+${(['test', 'rotate', 'delete'] as const).map((a) => `<form method="post" action="/me/webhooks/${a}">${csrfField(ctx)}<input type="hidden" name="id" value="${esc(w.id)}"><button class="copy${a === 'delete' ? ' bad' : ''}">${a === 'test' ? 'Send a test' : a === 'rotate' ? 'New secret' : 'Remove'}</button></form>`).join('')}</div>`,
+  )
+  .join('')}
+<form method="post" action="/me/webhooks/add">${csrfField(ctx)}<div class="row"><input name="url" type="url" required placeholder="https://example.com/webhooks/adnetwork" aria-label="Webhook URL"><input name="events" placeholder="Events (blank = all, or ad.*, deposit.completed)" aria-label="Events"><button class="btn">Add webhook</button></div></form>
+<p class="muted small">Also from the CLI (<code>adnetwork webhooks</code>), MCP and <code>/api/v1/webhooks</code>.</p></div>`
+}
+
+export function mePage(ctx: Ctx, o: { user: User; balanceCents: number; apiKey?: string; flash?: string; error?: string; webhooks?: PublicEndpoint[]; webhookSecret?: string }): string {
   const u = o.user
   return layout({
     ctx,
@@ -346,6 +368,7 @@ ${redeemCard(ctx)}
 <div class="card"><h2>Invites</h2><p class="muted small">Hand out up to three invites. When someone new joins with one, you both get ad credit. <a href="/invites">Your invites</a></p></div>
 <div class="card"><h2>API key</h2>${o.apiKey ? `<p>Your key, shown once:</p><div class="address"><code>${esc(o.apiKey)}</code><button class="copy" type="button" data-copy="${esc(o.apiKey)}">Copy</button></div><p class="muted small">export ADNETWORK_KEY=${esc(o.apiKey)}</p>` : `<p class="muted small">For the API, the CLI and MCP. ${u.apiKeyHash ? 'You have one; making a new one replaces it.' : ''}</p>`}
 <form method="post" action="/me/key">${csrfField(ctx)}<button class="copy">${u.apiKeyHash ? 'Replace my key' : 'Make a key'}</button></form></div>
+${webhooksCard(ctx, o.webhooks ?? [], o.webhookSecret)}
 <details class="card"><summary>Delete my account</summary><form method="post" action="/me/delete">${csrfField(ctx)}<button class="copy bad">Stop my ads and sites and delete everything ad.network keeps</button></form><p class="muted small">Withdraw your earnings first. Unspent ad budget is not refunded automatically: ask on <a href="${REPO}/issues">GitHub</a>.</p></details>`,
   })
 }

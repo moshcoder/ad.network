@@ -19,6 +19,7 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { COINS, CoinPay } from '@profullstack/coinpay-onboard'
 import { refresh as refreshTokens } from '@profullstack/coinpay-onboard/oauth'
+import { Webhooks, sqliteStore as webhookStore, type GuardOptions } from '@profullstack/webhooks'
 import { Crawlproof, CrawlproofError } from './crawlproof.js'
 import type { Campaign, DepositRow, Site, Store, User } from './db.js'
 
@@ -46,7 +47,29 @@ export type Config = {
   fetch?: typeof fetch
   /** Fetches a publisher's page to look for their tag; tests swap it. */
   fetchPage?: (url: string) => Promise<string>
+  /** Checks on customer webhook URLs; tests allow a fixed public address. */
+  webhookGuard?: GuardOptions
 }
+
+/**
+ * What ad.network tells customer webhooks about. The owner of each event is the
+ * advertiser or publisher it is about (their CoinPay sub).
+ */
+export const WEBHOOK_EVENTS = [
+  'ad.created',
+  'ad.started',
+  'ad.paused',
+  'ad.deleted',
+  'budget.exhausted',
+  'deposit.completed',
+  'deposit.failed',
+  'credit.added',
+  'site.added',
+  'site.verified',
+  'site.lost',
+  'site.removed',
+  'payout.requested',
+]
 
 export class UserError extends Error {
   constructor(message: string, readonly field?: string, readonly status = 400) {
@@ -159,6 +182,8 @@ export async function fetchPublicPage(url: string, hops = 3): Promise<string> {
 export class AdNetwork {
   readonly ads: Crawlproof
   readonly pubs: Crawlproof
+  /** Customer webhooks (@profullstack/webhooks): endpoints per account, durable delivery. */
+  readonly hooks: Webhooks
   private refreshing = new Map<string, Promise<CoinPay>>()
 
   constructor(
@@ -167,6 +192,23 @@ export class AdNetwork {
   ) {
     this.ads = new Crawlproof(config.crawlproofBase, config.advertiserToken, config.fetch)
     this.pubs = new Crawlproof(config.crawlproofBase, config.publisherToken, config.fetch)
+    this.hooks = new Webhooks({
+      store: webhookStore(store.db as never),
+      source: (config.origin ?? 'https://ad.network.pit.world').replace(/\/+$/, ''),
+      eventTypes: WEBHOOK_EVENTS,
+      ...(config.fetch ? { fetchImpl: config.fetch } : {}),
+      ...(config.webhookGuard ? { guard: config.webhookGuard } : {}),
+      log: (m) => console.log(m),
+    })
+  }
+
+  /** Tell an account's webhooks; never in the way of what caused it. */
+  hook(sub: string, type: string, data: Record<string, unknown>, subject?: string): void {
+    void this.hooks.emit(sub, type, data, subject ? { subject } : {}).catch((e) => console.error('ad.network: webhook:', e instanceof Error ? e.message : e))
+  }
+
+  private adData(c: Campaign): Record<string, unknown> {
+    return { ref: c.ref, name: c.name, url: c.url, daily_usd: c.dailyBudgetCents / 100, status: c.status, wanted: c.wanted, spent_usd: c.spentCents / 100 }
   }
 
   private house(sub: string): boolean {
@@ -247,7 +289,8 @@ export class AdNetwork {
     const creative = Array.isArray(c.creatives) ? (c.creatives.find((k) => k.headline) ?? c.creatives[0]) : undefined
     // crawlproof's own form of the page (it drops the query string) is the one it serves.
     const row = this.store.addCampaign({ id: c.id, ref: c.ref_slug, sub: user.sub, url: c.destination_url || url, name: c.name, dailyBudgetCents: daily, status: c.status, headline: creative?.headline ?? '', body: creative?.body ?? '' })
-    await this.enforce(user.sub).catch(() => {})
+    this.hook(user.sub, 'ad.created', this.adData(row), `ad:${row.ref}`)
+    await this.enforce(user.sub, 'requested').catch(() => {})
     return this.store.campaign(row.id)!
   }
 
@@ -260,7 +303,7 @@ export class AdNetwork {
   async setRunning(user: User, ref: string, running: boolean): Promise<Campaign> {
     const c = this.own(user, ref)
     this.store.updateCampaign(c.id, { wanted: running ? 'active' : 'paused' })
-    await this.enforce(user.sub)
+    await this.enforce(user.sub, 'requested')
     return this.store.campaign(c.id)!
   }
 
@@ -281,6 +324,7 @@ export class AdNetwork {
       if (!(e instanceof CrawlproofError && e.status === 404)) throw e
     })
     this.store.removeCampaign(c.id)
+    this.hook(user.sub, 'ad.deleted', this.adData(c), `ad:${c.ref}`)
   }
 
   /** Re-reads a campaign's numbers from crawlproof. */
@@ -299,8 +343,9 @@ export class AdNetwork {
    * Runs what should run and pauses what should not: an ad runs when its owner
    * wants it to and they can run (free launch, or a balance above zero).
    */
-  async enforce(sub: string): Promise<void> {
+  async enforce(sub: string, cause: 'requested' | 'funded' = 'funded'): Promise<void> {
     const funded = this.canRun(sub)
+    let starved = 0
     for (const c of this.store.campaigns(sub)) {
       const target = c.wanted === 'active' && funded ? 'active' : 'paused'
       const current = c.status === 'active' ? 'active' : 'paused'
@@ -310,11 +355,17 @@ export class AdNetwork {
       try {
         const r = await this.ads.updateCampaign(c.id, { status: target })
         this.store.updateCampaign(c.id, { status: r.status ?? target })
+        const now = this.store.campaign(c.id)!
+        // Why it changed: the owner asked, the money ran out, or budget arrived.
+        const reason = target === 'active' ? cause : c.wanted === 'active' ? 'no_budget' : 'requested'
+        if (target === 'paused' && reason === 'no_budget') starved += 1
+        this.hook(sub, target === 'active' ? 'ad.started' : 'ad.paused', { ...this.adData(now), reason }, `ad:${c.ref}`)
       } catch (e) {
         // 409: crawlproof is still writing the ad. The next sweep tries again.
         if (!(e instanceof CrawlproofError && e.status === 409)) throw e
       }
     }
+    if (starved) this.hook(sub, 'budget.exhausted', { balance_usd: this.balanceCents(sub) / 100, ads_paused: starved }, `account:${sub}`)
   }
 
   /**
@@ -358,6 +409,9 @@ export class AdNetwork {
       const d = await this.ads.depositStatus(id)
       if (d.status !== row.status) {
         this.store.setDepositStatus(id, d.status)
+        const data = { id, amount_usd: row.amountCents / 100, status: d.status, balance_usd: this.balanceCents(row.sub) / 100 }
+        if (d.status === 'complete') this.hook(row.sub, 'deposit.completed', data, `deposit:${id}`)
+        else if (d.status !== 'pending') this.hook(row.sub, 'deposit.failed', data, `deposit:${id}`)
         if (d.status === 'complete') await this.enforce(row.sub).catch(() => {})
       }
     } catch {
@@ -389,7 +443,11 @@ export class AdNetwork {
       if (!proven && Date.now() - existing.createdAt < CLAIM_GRACE_MS) {
         throw new UserError(`${host} was claimed by someone else and is waiting for their tag. If it is yours, add <meta name="ad.network" content="${this.claimCode(user.sub, host)}"> to your home page and try again.`, 'site', 409)
       }
-      return this.store.claimSite({ slotId: existing.slotId, sub: user.sub, host, embed: existing.embed })
+      const taken = this.store.claimSite({ slotId: existing.slotId, sub: user.sub, host, embed: existing.embed })
+      // The one who never placed their tag hears it went to someone who did.
+      this.hook(existing.sub, 'site.lost', { site: host, reason: proven ? 'proven_by_another_account' : 'claim_expired' }, `site:${host}`)
+      this.hook(user.sub, 'site.added', this.siteData(taken), `site:${host}`)
+      return taken
     }
     if (!this.house(user.sub) && this.store.sites(user.sub).length >= 25) throw new UserError('You have 25 sites already.')
     let slot
@@ -399,7 +457,21 @@ export class AdNetwork {
       throw new UserError(e instanceof CrawlproofError && e.status < 500 ? e.message : 'The ad service did not answer. Try again in a minute.', 'site', 502)
     }
     // Another publisher's slot for the same host would come back as `existing`; the host check above already handled it.
-    return this.store.claimSite({ slotId: slot.id, sub: user.sub, host, embed: slot.embed ?? '' })
+    const site = this.store.claimSite({ slotId: slot.id, sub: user.sub, host, embed: slot.embed ?? '' })
+    this.hook(user.sub, 'site.added', this.siteData(site), `site:${host}`)
+    return site
+  }
+
+  private siteData(s: Site): Record<string, unknown> {
+    return { site: s.host, live: Boolean(s.verifiedAt), wallet: s.payoutAddress || null, coin: s.payoutCoin, earned_usd: s.earnedCents / 100, withdrawable_usd: s.availableCents / 100 }
+  }
+
+  /** Marks a site proven (its tag was seen) and tells its owner's webhooks. */
+  private markVerified(s: Site): Site {
+    this.store.updateSite(s.slotId, { verifiedAt: Date.now() })
+    const now = this.store.site(s.slotId)!
+    this.hook(s.sub, 'site.verified', this.siteData(now), `site:${s.host}`)
+    return now
   }
 
   private ownSite(user: User, idOrHost: string): Site {
@@ -419,8 +491,7 @@ export class AdNetwork {
     if (s.verifiedAt) return s
     const found = await this.pageCarries(s.host, this.claimCode(user.sub, s.host))
     if (!found) throw new UserError(`We did not find your tag on https://${s.host}/ yet. Paste it into the page (before </body>), publish, and check again.`)
-    this.store.updateSite(s.slotId, { verifiedAt: Date.now() })
-    return this.store.site(s.slotId)!
+    return this.markVerified(s)
   }
 
   async setWallet(user: User, idOrHost: string, address: string, coin?: string): Promise<Site> {
@@ -446,6 +517,7 @@ export class AdNetwork {
     try {
       const r = await this.pubs.withdraw(s.slotId)
       this.store.addWithdrawal({ slotId: s.slotId, sub: user.sub, amountCents: r.amount_cents, status: r.status })
+      this.hook(user.sub, 'payout.requested', { site: s.host, amount_usd: r.amount_cents / 100, status: r.status, wallet: s.payoutAddress, coin: s.payoutCoin }, `site:${s.host}`)
       await this.refreshSite(s).catch(() => {})
       return { amountCents: r.amount_cents, status: r.status }
     } catch (e) {
@@ -458,6 +530,7 @@ export class AdNetwork {
     const s = this.ownSite(user, idOrHost)
     await this.pubs.updateSlot(s.slotId, { status: 'paused' }).catch(() => {})
     this.store.removeSite(s.slotId)
+    this.hook(user.sub, 'site.removed', this.siteData(s), `site:${s.host}`)
   }
 
   // ---- the sweep ----------------------------------------------------------------
@@ -468,7 +541,7 @@ export class AdNetwork {
     for (const d of this.store.pendingDeposits(sub)) await this.followDeposit(d.id)
     await this.enforce(sub).catch((e) => console.error(`enforce ${sub}: ${e instanceof Error ? e.message : e}`))
     for (const s of this.store.sites(sub)) {
-      if (!s.verifiedAt && (await this.pageCarries(s.host, this.claimCode(sub, s.host)).catch(() => false))) this.store.updateSite(s.slotId, { verifiedAt: Date.now() })
+      if (!s.verifiedAt && (await this.pageCarries(s.host, this.claimCode(sub, s.host)).catch(() => false))) this.markVerified(s)
       await this.refreshSite(s).catch(() => {})
     }
   }

@@ -5,6 +5,9 @@ import { cleanHost, cleanUrl, privateAddress } from '../src/service.ts'
 import { onKey, initialState, pick, rows } from '../src/tui.ts'
 import { flag, main } from '../src/cli.ts'
 import { AdNetworkClient } from '../src/client.ts'
+import { createMcpServer } from '../src/mcp.ts'
+import { verifySignature } from '@profullstack/webhooks'
+import type { Config } from '../src/service.ts'
 
 const KEY = 'test-key-0123456789abcdef'
 
@@ -22,6 +25,8 @@ function fakes() {
     tokenOf: [] as string[],
     grants: new Map<string, number>(),
     grantsDown: false,
+    /** What customer webhook receivers got. */
+    hooks: [] as { url: string; headers: Headers; raw: string; body: any }[],
   }
   let n = 0
   const fetchImpl = (async (url: string | URL, init: RequestInit = {}) => {
@@ -32,6 +37,10 @@ function fakes() {
     const body: any = raw.startsWith('{') ? JSON.parse(raw) : raw ? Object.fromEntries(new URLSearchParams(raw)) : {}
     const path = u.pathname
     const auth = new Headers(init.headers).get('authorization') ?? ''
+    if (u.host.startsWith('hooks.')) {
+      s.hooks.push({ url: String(url), headers: new Headers(init.headers), raw, body })
+      return new Response('ok', { status: 200 })
+    }
     if (u.host === 'cp.test') {
       if (path === '/api/oauth/token') return json(200, { access_token: 'at', refresh_token: 'rt', expires_in: 3600, scope: 'openid profile email wallet:read' })
       if (path === '/api/oauth/userinfo') return json(200, { sub: s.sub, name: s.sub === 'u-alice' ? 'Alice Smith' : 'Bob', email: `${s.sub}@example.com` })
@@ -102,7 +111,7 @@ function fakes() {
   return { s, fetchImpl }
 }
 
-function setup(extra: { freeAds?: boolean } = {}) {
+function setup(extra: Partial<Config> = {}) {
   const f = fakes()
   const pages = new Map<string, string>()
   const store = new Store(':memory:', new Sealer(KEY))
@@ -526,5 +535,134 @@ describe('credit codes and invites', () => {
     expect((await inv.json()).link).toMatch(/^https:\/\/ad\.network\.pit\.world\/i\/INV-/)
     const list = await (await t.req('/api/v1/invites', { headers: auth })).json()
     expect(list.quota).toEqual({ total: 3, used: 1, left: 2 })
+  })
+})
+
+describe('customer webhooks', () => {
+  // Webhook URLs resolve to a public address in tests (the real guard does DNS).
+  const guard = { webhookGuard: { lookup: async () => ['93.184.216.34'] } }
+
+  test('the API is behind the key and scoped to its account', async () => {
+    const t = setup(guard)
+    t.store.upsertUser('u-alice', 'Alice', 'a@example.com', { accessToken: 'a', refreshToken: null, expiresAt: 0 })
+    t.store.upsertUser('u-bob', 'Bob', 'b@example.com', { accessToken: 'a', refreshToken: null, expiresAt: 0 })
+    t.store.setApiKey('u-alice', 'an_alice')
+    t.store.setApiKey('u-bob', 'an_bob')
+    const call = (key: string, method: string, path: string, body?: unknown) =>
+      t.req(path, { method, headers: { authorization: `Bearer ${key}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+    expect((await t.req('/api/v1/webhooks')).status).toBe(401)
+    expect((await t.req('/api/v1/webhooks', { method: 'POST' })).status).toBe(401)
+    const created = await call('an_alice', 'POST', '/api/v1/webhooks', { url: 'https://hooks.example.com/an', events: ['ad.*', 'deposit.completed'] })
+    expect(created.status).toBe(201)
+    const { endpoint, secret } = (await created.json()) as any
+    expect(secret).toStartWith('whsec_')
+    const list = (await (await call('an_alice', 'GET', '/api/v1/webhooks')).json()) as any
+    expect(list.endpoints.map((e: any) => e.id)).toEqual([endpoint.id])
+    expect(list.event_types).toContain('budget.exhausted')
+    expect(((await (await call('an_bob', 'GET', '/api/v1/webhooks')).json()) as any).endpoints).toEqual([])
+    expect((await call('an_bob', 'GET', `/api/v1/webhooks/${endpoint.id}`)).status).toBe(404)
+    expect((await call('an_bob', 'DELETE', `/api/v1/webhooks/${endpoint.id}`)).status).toBe(404)
+    expect((await call('an_alice', 'POST', '/api/v1/webhooks', { url: 'https://hooks.example.com/x', events: ['nope.*'] })).status).toBe(400)
+    expect((await call('an_alice', 'POST', '/api/v1/webhooks', { url: 'http://127.0.0.1/x' })).status).toBe(400)
+    const tested = (await (await call('an_alice', 'POST', `/api/v1/webhooks/${endpoint.id}/test`)).json()) as any
+    expect(tested).toMatchObject({ ok: true, status: 200 })
+    expect(t.f.s.hooks.at(-1)!.body).toMatchObject({ type: 'webhook.test' })
+  })
+
+  test('an advertiser and a publisher hear about their own ads, money and sites, signed', async () => {
+    const t = setup(guard)
+    await t.signIn('u-alice')
+    // Add a webhook from the account page: the secret is shown once.
+    const added = await (await t.req('/me/webhooks/add', { method: 'POST', form: { csrf: await t.csrf('/me'), url: 'https://hooks.example.com/alice', events: '' } })).text()
+    const secret = /(whsec_[A-Za-z0-9+/=]+)/.exec(added)![1]!
+    expect(added).toContain('https://hooks.example.com/alice')
+    const id = (await t.net.hooks.listEndpoints('u-alice'))[0]!.id
+    const tested = await (await t.req('/me/webhooks/test', { method: 'POST', form: { csrf: await t.csrf('/me'), id } })).text()
+    expect(tested).toContain('Test delivered (HTTP 200)')
+    t.f.s.hooks.length = 0
+
+    // Advertiser: an ad, a deposit that lands, then the budget runs out.
+    const made = await t.req('/advertise', { method: 'POST', form: { csrf: await t.csrf('/advertise'), url: 'example.com/launch', daily: '5' } })
+    const ref = made.headers.get('location')!.split('/')[2]!.split('?')[0]!
+    const funded = await t.req('/advertise/fund', { method: 'POST', form: { csrf: await t.csrf('/advertise'), amount: '25' } })
+    const depositId = funded.headers.get('location')!.split('/').pop()!
+    t.f.s.deposits.get(depositId).status = 'complete'
+    await t.req(`/deposits/${depositId}.json`)
+    t.f.s.campaigns.get('c1').stats = { impressions: 900, clicks: 125, spent_cents: 2500, spend_today_cents: 500, free_impressions: 100, free_clicks: 5 }
+    await t.net.sync('u-alice')
+
+    // Publisher: a site, proven, paid out.
+    await t.req('/publish', { method: 'POST', form: { csrf: await t.csrf('/publish'), site: 'myblog.com' } })
+    const site = t.store.site('myblog.com')!
+    const csrf = await t.csrf('/sites/myblog.com')
+    await t.req('/sites/myblog.com/wallet', { method: 'POST', form: { csrf, address: '0xAliceWallet000000000000000000000000000001', coin: 'usdc_pol' } })
+    t.pages.set('myblog.com', t.net.embedFor(site))
+    await t.req('/sites/myblog.com/check', { method: 'POST', form: { csrf } })
+    const slot = t.f.s.slots.get(site.slotId)
+    slot.available_cents = 740
+    await t.req('/sites/myblog.com/withdraw', { method: 'POST', form: { csrf } })
+
+    // Bob takes an unproven claim of Alice's: Alice hears she lost it; Bob hears nothing of Alice's.
+    await t.req('/publish', { method: 'POST', form: { csrf: await t.csrf('/publish'), site: 'contested.org' } })
+    await t.signIn('u-bob')
+    t.pages.set('contested.org', `<meta name="ad.network" content="${t.net.claimCode('u-bob', 'contested.org')}">`)
+    await t.req('/publish', { method: 'POST', form: { csrf: await t.csrf('/publish'), site: 'contested.org' } })
+
+    await t.net.hooks.drain()
+    const got = t.f.s.hooks.filter((h) => h.url === 'https://hooks.example.com/alice')
+    expect(got.length).toBe(t.f.s.hooks.length)
+    const types = got.map((h) => h.body.type)
+    expect(types).toEqual(expect.arrayContaining(['ad.created', 'deposit.completed', 'ad.started', 'ad.paused', 'budget.exhausted', 'site.added', 'site.verified', 'payout.requested', 'site.lost']))
+    const by = (type: string) => got.find((h) => h.body.type === type)!.body
+    expect(by('ad.created')).toMatchObject({ specversion: '1.0', source: 'https://ad.network.pit.world', subject: `ad:${ref}`, data: { ref, url: 'https://example.com/launch', daily_usd: 5, status: 'draft' } })
+    expect(by('deposit.completed').data).toMatchObject({ id: depositId, amount_usd: 25, status: 'complete', balance_usd: 25 })
+    expect(by('ad.started').data).toMatchObject({ ref, reason: 'funded' })
+    expect(by('ad.paused').data).toMatchObject({ ref, reason: 'no_budget' })
+    expect(by('budget.exhausted').data).toMatchObject({ balance_usd: 0, ads_paused: 1 })
+    expect(by('site.verified')).toMatchObject({ subject: 'site:myblog.com', data: { site: 'myblog.com', live: true } })
+    expect(by('payout.requested').data).toMatchObject({ site: 'myblog.com', amount_usd: 7.4, status: 'confirmed' })
+    expect(by('site.lost').data).toEqual({ site: 'contested.org', reason: 'proven_by_another_account' })
+
+    // Every delivery verifies against the secret the page showed.
+    for (const h of got) expect(verifySignature({ headers: h.headers, body: h.raw, secret }).ok).toBe(true)
+    expect(verifySignature({ headers: got[0]!.headers, body: got[0]!.raw, secret: 'whsec_' + Buffer.from('wrong-secret-0123456789').toString('base64') }).ok).toBe(false)
+
+    // Rotate and remove from the page.
+    await t.signIn('u-alice')
+    expect(await (await t.req('/me')).text()).toContain('hooks.example.com/alice')
+    const rotated = await (await t.req('/me/webhooks/rotate', { method: 'POST', form: { csrf: await t.csrf('/me'), id } })).text()
+    expect(/(whsec_[A-Za-z0-9+/=]+)/.exec(rotated)![1]).not.toBe(secret)
+    await t.req('/me/webhooks/delete', { method: 'POST', form: { csrf: await t.csrf('/me'), id } })
+    expect(await t.net.hooks.listEndpoints('u-alice')).toEqual([])
+  })
+
+  test('the CLI and MCP manage webhooks', async () => {
+    const t = setup(guard)
+    await t.signIn()
+    const key = /(an_[A-Za-z0-9_-]+)/.exec(await (await t.req('/me/key', { method: 'POST', form: { csrf: await t.csrf('/me') } })).text())![1]!
+    const viaApp = (async (url: string | URL, init?: RequestInit) => {
+      const u = new URL(String(url))
+      return t.req(u.pathname + u.search, { ...init, headers: new Headers(init?.headers) })
+    }) as typeof fetch
+    const client = new AdNetworkClient('https://ad.network.pit.world', key, viaApp)
+    const lines: string[] = []
+    const out = { log: (s: string) => lines.push(s), error: (s: string) => lines.push(`ERR ${s}`) }
+    expect(await main(['webhook', 'add', 'https://hooks.example.com/cli', 'site.*'], out, client)).toBe(0)
+    expect(lines.at(-1)).toContain('signing secret (shown once): whsec_')
+    const id = lines.at(-1)!.split(' ')[0]!
+    expect(await main(['webhooks'], out, client)).toBe(0)
+    expect(lines.at(-1)).toContain(`${id}  https://hooks.example.com/cli  site.*`)
+    expect(await main(['webhook', 'test', id], out, client)).toBe(0)
+    expect(lines.at(-1)).toBe('delivered (HTTP 200)')
+    expect(await main(['webhook', 'log'], out, client)).toBe(0)
+    expect(lines.at(-1)).toContain('webhook.test')
+    expect(await main(['webhook', 'rm', id], out, client)).toBe(0)
+    expect((await client.webhooks()).endpoints).toEqual([])
+
+    const server: any = createMcpServer(client)
+    const tools = Object.keys(server._registeredTools)
+    expect(tools).toEqual(expect.arrayContaining(['list_webhooks', 'create_webhook', 'test_webhook', 'rotate_webhook_secret', 'delete_webhook', 'webhook_deliveries']))
+    const r = await server._registeredTools.create_webhook.handler({ url: 'https://hooks.example.com/mcp', events: ['ad.*'] }, {})
+    expect(JSON.parse(r.content[0].text).secret).toStartWith('whsec_')
   })
 })

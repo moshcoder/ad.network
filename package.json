@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/adnetwork",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "ad.network: run ads, or earn from your site, in crypto. Paste a link and a budget, or paste one tag and add a wallet. Web, API, CLI, TUI and MCP; ads by crawlproof, payments by CoinPay.",
   "license": "MIT",
   "type": "module",
@@ -47,6 +47,7 @@
     "@profullstack/footer": "^0.4.0",
     "@profullstack/hqtui": "^0.11.0",
     "@profullstack/redeem-credits": "0.2.0",
+    "@profullstack/webhooks": "0.2.1",
     "hono": "^4.13.14",
     "mailchecker": "^6.0.21",
     "qrcode": "^1.5.4",

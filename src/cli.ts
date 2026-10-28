@@ -32,6 +32,11 @@ export const HELP = `adnetwork ${VERSION}: run ads, or earn from your site, in c
   adnetwork invite [note]                    make an invite link
   adnetwork accept <invite-code>             accept an invite on your new account
 
+  adnetwork webhooks                         your webhook endpoints and the events ad.network sends
+  adnetwork webhook add <url> [events...]    POST ad, budget and site events to your URL (Standard Webhooks; prints the secret)
+  adnetwork webhook test|rotate|rm <id>      send a test, replace the secret, or remove it
+  adnetwork webhook log [id]                 recent deliveries
+
   adnetwork mcp                              MCP server: claude mcp add adnetwork -- bunx @profullstack/adnetwork mcp
   adnetwork serve [--port N]                 run your own instance
 
@@ -180,6 +185,30 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'accept': {
         const r = await client.acceptInvite(need(rest[0], 'an invite code'))
         show(r, r.bonus_usd ? `Accepted: ${money(r.bonus_usd)} of ad credit added.` : `Accepted${r.no_bonus ? ` (no bonus: ${r.no_bonus})` : ''}.`)
+        return 0
+      }
+      case 'webhooks': {
+        const r = await client.webhooks()
+        show(r, [...r.endpoints.map((w) => `${w.id}  ${w.url}  ${w.events.join(',')}${w.enabled ? '' : `  OFF (${w.disabled_reason})`}`), `events: ${r.event_types.join(', ')}`].join('\n'))
+        return 0
+      }
+      case 'webhook': {
+        const sub = need(rest[0], 'add, test, rotate, rm or log')
+        if (sub === 'add') {
+          const r = await client.addWebhook(need(rest[1], 'a URL'), rest.slice(2))
+          show(r, `${r.endpoint.id} -> ${r.endpoint.url}\nsigning secret (shown once): ${r.secret}`)
+        } else if (sub === 'test') {
+          const r = await client.testWebhook(need(rest[1], 'a webhook id'))
+          show(r, r.ok ? `delivered (HTTP ${r.status})` : `failed: ${r.error ?? r.status}`)
+        } else if (sub === 'rotate') {
+          const r = await client.rotateWebhook(need(rest[1], 'a webhook id'))
+          show(r, `new signing secret: ${r.secret}`)
+        } else if (sub === 'rm' || sub === 'remove' || sub === 'delete') {
+          show(await client.removeWebhook(need(rest[1], 'a webhook id')), 'removed')
+        } else if (sub === 'log') {
+          const r = await client.webhookLog(rest[1])
+          show(r, r.deliveries.map((d) => `${d.created_at.slice(0, 19)}  ${d.event_type.padEnd(18)} ${d.status.padEnd(9)} x${d.attempts} ${d.last_status ?? ''} ${d.last_error ?? ''}`).join('\n') || 'no deliveries yet')
+        } else throw new Error(`adnetwork webhook ${sub}? try add, test, rotate, rm or log`)
         return 0
       }
       case 'remove': {

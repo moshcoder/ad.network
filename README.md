@@ -46,6 +46,16 @@ claim code for one person, and withdrawals wait for it.
 - **Invites** (`@profullstack/affiliates`): 3 per account, `/invites`, `/i/<code>` (cookie `an_invite`, accepted at the CoinPay sign-in, or paste the code on `/invites`). One accepted invite per account, accounts under 7 days old; senders must be a day old. Both sides get `ADNETWORK_INVITE_BONUS_CENTS` (default 500) of ad credit, except throwaway addresses, the inviter's own mailbox (+tag / Gmail dots), house accounts; the inviter's half stops at `ADNETWORK_INVITE_MONTHLY_CAP` (5) per 30 days.
 - **Where ad credit lives.** Every grant goes to crawlproof first (`POST /api/ads/v1/grants`): it lands on the shared advertiser account as `ad_bonus_credits`, which runs ads but pays no publisher, so credit nobody paid for can never be withdrawn as crypto. Then a `deposits` row (coin `credit`, id `credit:<source>`) adds it to the person's balance here. Both are idempotent on the source.
 
+## Webhooks
+
+Customer webhooks via `@profullstack/webhooks` (Standard Webhooks signatures, CloudEvents bodies, durable
+outbox in the same SQLite file, retried for about three days, SSRF-guarded URLs). Each event goes to the
+account it is about: `ad.created`, `ad.started` / `ad.paused` (`reason`: `requested`, `funded`, `no_budget`),
+`ad.deleted`, `budget.exhausted`, `deposit.completed`, `deposit.failed`, `credit.added`, `site.added`,
+`site.verified`, `site.lost` (someone else proved a site you never did), `site.removed`, `payout.requested`.
+Manage them at `/me#webhooks`, `/api/v1/webhooks` (list, create, test, rotate, deliveries, delete; API key),
+`adnetwork webhooks` / `adnetwork webhook add|test|rotate|rm|log`, or MCP `create_webhook` and friends.
+
 ## Run it
 
 ```sh

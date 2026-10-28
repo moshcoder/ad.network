@@ -122,6 +122,8 @@ export class Rewards {
     const g = await this.net.ads.grant({ amount_usd: amount / 100, reference: `ad.network:${sub}:${source}` })
     const granted = Math.round(g.amount_usd * 100)
     this.store.addDeposit({ id, sub, amountCents: granted, coin: CREDIT_COIN, address: '', amountCrypto: '', status: 'complete', expiresAt: null })
+    // source is code:<id> or invite:<id>:<side>; the kind is all a receiver needs.
+    this.net.hook(sub, 'credit.added', { amount_usd: granted / 100, kind: source.split(':')[0], spend_only: true, balance_usd: this.net.balanceCents(sub) / 100 }, `account:${sub}`)
     await this.net.enforce(sub).catch(() => {})
     return true
   }
