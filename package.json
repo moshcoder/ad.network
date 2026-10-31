@@ -44,7 +44,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@profullstack/affiliates": "0.3.0",
     "@profullstack/coinpay-onboard": "^0.2.0",
-    "@profullstack/footer": "^0.4.0",
+    "@profullstack/footer": "latest",
     "@profullstack/hqtui": "^0.11.0",
     "@profullstack/redeem-credits": "0.2.0",
     "@profullstack/webhooks": "0.2.1",
