@@ -5,7 +5,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { Campaign, DepositRow, Site, User, Withdrawal } from './db.js'
-import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter } from './ring-footer.js'
 import type { PublicEndpoint } from '@profullstack/webhooks'
@@ -77,7 +76,6 @@ ${RING_PLACEHOLDER}
 ${o.body}
 </main>
 ${ringFooter()}
-${pitFooter()}
 </body>
 </html>`
 }
