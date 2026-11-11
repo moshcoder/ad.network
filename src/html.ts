@@ -17,6 +17,9 @@ const COINPAY = 'https://coinpayportal.com'
 
 /** crawlproof analytics: one async script on every page. CRAWLPROOF_SITE_ID overrides; 'off' drops it. */
 const TRACKER_SITE = process.env.CRAWLPROOF_SITE_ID ?? ''
+// WebMCP (@profullstack/webmcp): site_info/open_page plus the annotated forms below as tools for
+// the AI agent in the visitor's browser. Forms never auto-submit: they spend or change the account.
+const WEBMCP = `<script type="module" data-webmcp src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js" data-pages='{"advertise":"/advertise","publish":"/publish","help":"/help","account":"/me","invites":"/invites"}'></script>`
 const TRACKER = TRACKER_SITE && TRACKER_SITE !== 'off' ? `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>` : ''
 
 const asset = (name: string) => {
@@ -60,6 +63,7 @@ ${o.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" 
 ${o.head ?? ''}
 ${o.script ? `<script src="${SCRIPT_URL}" defer></script>` : ''}
 ${TRACKER}
+${WEBMCP}
 </head>
 <body>
 ${RING_PLACEHOLDER}
@@ -187,7 +191,7 @@ function adRow(c: Campaign): string {
 }
 
 function fundForm(ctx: Ctx, values: { amount?: string } = {}): string {
-  return `<form method="post" action="/advertise/fund" class="row">${csrfField(ctx)}
+  return `<form method="post" action="/advertise/fund" class="row" toolname="add_ad_budget" tooldescription="Fill in the add-budget form with an amount in USD (pays on CoinPay); the person confirms and submits">${csrfField(ctx)}
   <input name="amount" inputmode="decimal" placeholder="Amount (USD)" value="${esc(values.amount ?? '25')}" aria-label="Amount in USD">
   <button class="btn">Add budget</button></form>`
 }
@@ -202,7 +206,7 @@ export function advertisePage(ctx: Ctx, o: { balanceCents: number; campaigns: Ca
     path: '/advertise',
     body: `<section class="hero" style="padding-bottom:1rem"><h1>Advertise</h1><p class="tag">${ctx.free ? '<b>Free while we launch.</b> Your ads run with no balance. ' : ''}Balance <b>${usd(Math.max(0, o.balanceCents))}</b>${!ctx.free && o.balanceCents <= 0 ? ' · add budget to start your ads' : ''}</p></section>
 ${flashNote(o.flash)}${flashNote(o.error, true)}
-<form method="post" action="/advertise" class="card">${csrfField(ctx)}
+<form method="post" action="/advertise" class="card" toolname="create_ad" tooldescription="Fill in the new-ad form: the landing page URL and a daily budget in USD; the person reviews and submits">${csrfField(ctx)}
   <h2>New ad</h2>
   <label for="url">Link people land on</label>
   <input id="url" name="url" required placeholder="https://example.com/your-page" value="${esc(v.url ?? '')}" autocomplete="url" spellcheck="false">
@@ -289,7 +293,7 @@ export function publishPage(ctx: Ctx, o: { sites: Site[]; withdrawals: Withdrawa
     path: '/publish',
     body: `<section class="hero" style="padding-bottom:1rem"><h1>Publish</h1><p class="tag">${o.sites.length ? `Your sites have earned <b>${usd(earned)}</b>.` : 'Put ads on your site and get paid in USDC.'}</p></section>
 ${flashNote(o.flash)}${flashNote(o.error, true)}
-<form method="post" action="/publish" class="card">${csrfField(ctx)}
+<form method="post" action="/publish" class="card" toolname="add_publisher_site" tooldescription="Fill in the add-a-site form with the publisher's domain to get an ad tag; the person submits">${csrfField(ctx)}
   <h2>Add a site</h2>
   <label for="site">Your site</label>
   <div class="row"><input id="site" name="site" required placeholder="example.com" value="${esc(v.site ?? '')}" spellcheck="false" autocapitalize="none"><button class="btn">Get my tag</button></div>
