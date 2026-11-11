@@ -31,7 +31,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   // https://pit.world: the footer's newsletter form posts to pit.world/api/subscribe
   // (connect-src) and falls back to a plain POST to pit.world/subscribe (form-action).
   // script-src also gets the footer's inline-script hashes, added per response below.
-  'content-security-policy': "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' https://crawlproof.com; img-src 'self' data: https://built.indie.pit.world https://pwamart.com; connect-src 'self' https://crawlproof.com https://pit.world; frame-src https://crawlproof.com; form-action 'self' https://coinpayportal.com https://pit.world; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' https://crawlproof.com https://cdn.jsdelivr.net; img-src 'self' data: https://built.indie.pit.world https://pwamart.com; connect-src 'self' https://crawlproof.com https://pit.world; frame-src https://crawlproof.com; form-action 'self' https://coinpayportal.com https://pit.world; base-uri 'none'; frame-ancestors 'none'",
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
